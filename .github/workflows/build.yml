@@ -1,0 +1,87 @@
+name: Build
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.2
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(bun -p 'require("./package.json").version')
+          test "$TAG" = "v$version" || { echo "Tag must match package.json: v$version"; exit 1; }
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run check
+      - run: bun test
+      - run: bun run build
+      - name: Package and test the release archive
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          tar -C dist -czf "longshot-$PLATFORM.tar.gz" longshot
+          version=$(bun -p 'require("./package.json").version')
+          checkout="$PWD"
+          install_test=$(mktemp -d)
+          mv node_modules node_modules.saved
+          trap 'mv "$checkout/node_modules.saved" "$checkout/node_modules"; rm -rf "$install_test"' EXIT
+          tar -xzf "longshot-$PLATFORM.tar.gz" -C "$install_test"
+          cd "$install_test"
+          test "$(./longshot --version)" = "$version"
+          ./longshot --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longshot-${{ matrix.platform }}
+          path: longshot-*.tar.gz
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: longshot-*
+          merge-multiple: true
+          path: artifacts
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        working-directory: artifacts
+        run: |
+          # Each published installer pins its own release; no latest-version API lookup.
+          sed "s/@VERSION@/${TAG#v}/g" ../scripts/install.sh > install.sh
+          sh -n install.sh
+          sha256sum longshot-*.tar.gz install.sh > SHA256SUMS
+          flags=()
+          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --draft --verify-tag --generate-notes "${flags[@]}" \
+            longshot-*.tar.gz SHA256SUMS install.sh
