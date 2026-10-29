@@ -277,6 +277,12 @@ export async function control(
       }
       if (action === "resume" && current.status === "active")
         return report({ goal: current }, options.json, "Goal is already active.");
+      if (action === "resume") {
+        // The plugin needs a fresh execution to recognize an explicit resume.
+        const active = await api<{ data: Record<string, unknown> }>(box, "/api/session/active");
+        if (id in active.data)
+          throw new Error("Wait for status to show execution is idle before resuming the goal.");
+      }
       await api(box, `/api/session/${id}/command`, {
         name: action === "pause" ? "pause_goal" : "resume_goal",
         text: "",

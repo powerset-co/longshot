@@ -43,7 +43,8 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
-          tar -C dist -czf "longshot-$PLATFORM.tar.gz" longshot
+          cp LICENSE dist/LICENSE
+          tar -C dist -czf "longshot-$PLATFORM.tar.gz" longshot LICENSE
           version=$(bun -p 'require("./package.json").version')
           checkout="$PWD"
           install_test=$(mktemp -d)

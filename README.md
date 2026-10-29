@@ -1,8 +1,13 @@
 # Longshot
 
-A tiny CLI for managing long-running, goal-based, coding tasks on [Sailboxes](https://docs.sailresearch.com/sailbox-sdk), using Sail inference and OpenCode in goal mode.
+A small CLI for long-running coding tasks. Give it a goal, let [OpenCode](https://opencode.ai) work in a [Sailbox](https://docs.sailresearch.com/sailbox-sdk) using Sail inference, and download the results when it's done.
 
 **One directory, one run.** Longshot keeps resource IDs in `.longshot/run.json`. The agent runs remotely; your terminal can disconnect and re-attach later. There is no local daemon or global Longshot directory.
+
+![Longshot starts a CSV CLI task, checks its progress, exports the code, and runs the generated tests.](docs/demo.gif)
+
+An actual run, condensed for playback. Setup and inference waits are shortened.
+[Read the demo](docs/demo.md) or [try its goal](examples/csv-summary/GOAL.md).
 
 ## Install
 
@@ -20,10 +25,10 @@ To install a particular version or choose a different directory:
 
 ```sh
 curl -fsSL https://github.com/powerset-co/longshot/releases/latest/download/install.sh | \
-  sh -s -- --version 0.1.0 --bin-dir "$HOME/.local/bin"
+  sh -s -- --version 0.1.1 --bin-dir "$HOME/.local/bin"
 ```
 
-You can also download an archive and checksums from [GitHub Releases](https://github.com/powerset-co/longshot/releases), extract it, and put the `longshot` executable on your PATH. For an unreleased checkout, see [building from source](#building-from-source). The installer URL is available once the first release is published.
+You can also download an archive and checksums from [GitHub Releases](https://github.com/powerset-co/longshot/releases), extract it, and put the `longshot` executable on your PATH. For an unreleased checkout, see [building from source](#building-from-source).
 
 ## Usage
 
@@ -32,10 +37,12 @@ Set your key and move into the project you want the agent to work on:
 ```sh
 export SAIL_API_KEY='your-key'
 cd my-project
-longshot start 'Build a simple Go CLI that prints the first 10000 fibonacci numbers.' --budget 10
+longshot start 'Build a Python CLI that summarizes CSV files as JSON. Add tests and run them.' --budget 10
 ```
 
 For a longer specification, write it in `GOAL.md` and use `longshot start --file GOAL.md`. A budget is optional and estimates **inference only**; there is no budget by default. Sandbox compute is billed separately.
+
+For a first run, copy the two files in [examples/csv-summary](examples/csv-summary) into an empty directory and run `longshot start --file GOAL.md --budget 2` there. Longshot uploads the current directory, so choose the project directory before starting.
 
 `start` begins the project in a new Sailbox and returns once the remote goal is confirmed. You can close your terminal and check back later:
 
@@ -45,6 +52,8 @@ longshot logs
 longshot message 'Prioritize the failing integration tests.'
 longshot attach
 ```
+
+Initial setup installs OpenCode and development tools, so it can take a few minutes. Once started, the agent works independently of the local CLI. `status --json` and `logs --json` also let coding agents inspect and manage a run.
 
 `logs` follows new events; Ctrl+C disconnects the reader. In `attach`, press Ctrl+X, then Q to detach. Both leave the remote goal running.
 
@@ -56,6 +65,8 @@ longshot destroy --yes
 ```
 
 Your project files are in `result/workspace`; session history and logs are in `result/session`. To stop a goal early, use `longshot pause`, then wait for execution to become idle before exporting. **Completion and pause leave the Sailbox running until you destroy it.**
+
+To continue a paused goal, wait for `status` to show `Execution: idle`, then run `longshot resume`. Keep guidance messages until the resume command confirms the goal is active.
 
 ## Commands
 
@@ -196,8 +207,8 @@ Release assets live in [powerset-co/longshot](https://github.com/powerset-co/lon
 2. Push the matching tag, for example:
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.1.1
+   git push origin v0.1.1
    ```
 
 3. GitHub Actions checks that the tag matches `package.json`, runs the tests, builds macOS/Linux ARM64/x64 archives, and tests each extracted binary outside the checkout without `node_modules`.
