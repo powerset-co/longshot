@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { EgressPolicy, Sailbox, Secret, type EgressPolicyDocument } from "@sailresearch/sdk";
 import setupScript from "./guest-setup.sh" with { type: "text" };
+import { startupProgress } from "./progress.ts";
 import { createRun, newRun, readConfig, readRun, saveRun, stageUpload, versions } from "./state.ts";
 import {
   cleanup,
@@ -65,42 +66,45 @@ export async function start(options: Options, objective: string) {
   const policy = inferencePolicy(run.secretName, extraPolicy);
   // Finish local validation before reserving this directory or creating cloud resources.
   await createRun(directory, run);
+  const progress = startupProgress(options.json);
   try {
-    console.error("Preparing project files...");
+    progress.stage("Preparing project files");
     const upload = await stageUpload(directory, config.exclude);
+    progress.stage("Configuring Sail credentials");
     // Unique names prevent accidental replacement of another run's secret.
     await saveRun(directory, run, "creating-secret");
     await Secret.set(run.secretName, process.env.SAIL_API_KEY!, { client: apiClient });
     await saveRun(directory, run, "creating-policy");
     run.policyId = (await EgressPolicy.create(run.name, policy, { client: apiClient })).id;
     await saveRun(directory, run, "creating-box");
-    console.error("Creating Sailbox (compute charges start now)...");
+    progress.stage("Creating Sailbox (compute charges start now)");
     const box = await provisionBox(run, apiClient);
     run.boxId = box.sailboxId;
     await saveRun(directory, run, "setting-up");
-    console.error(`Sailbox ${run.boxId}: installing OpenCode ${versions.opencode}...`);
+    progress.stage(`Installing OpenCode ${versions.opencode}`);
     await box.fs.write("/tmp/longshot-setup.sh", setupScript, { mode: 0o700 });
-    await streamCommand(box, ["bash", "/tmp/longshot-setup.sh", run.versions.opencode], {
-      user: "0:0",
-      cwd: "/",
-      timeoutSeconds: 1200,
-    });
-    console.error("Uploading project files...");
+    await streamCommand(
+      box,
+      ["bash", "/tmp/longshot-setup.sh", run.versions.opencode],
+      { user: "0:0", cwd: "/", timeoutSeconds: 1200 },
+      progress.write,
+    );
+    progress.stage("Uploading project files");
     await box.fs.uploadDir({ localDir: upload, guestDir: project, user });
     await rm(upload, { recursive: true, force: true });
     await box.fs.write(`${session}/goal.md`, objective, { user });
     if (customSetup !== null) {
-      console.error("Running project setup...");
+      progress.stage("Running project setup");
       await box.fs.write(`${session}/setup.sh`, customSetup, { user, mode: 0o700 });
-      await streamCommand(box, ["bash", "-e", `${session}/setup.sh`], {
-        cwd: project,
-        user,
-        env: config.env,
-        timeoutSeconds: 1200,
-      });
+      await streamCommand(
+        box,
+        ["bash", "-e", `${session}/setup.sh`],
+        { cwd: project, user, env: config.env, timeoutSeconds: 1200 },
+        progress.write,
+      );
     }
     await saveRun(directory, run, "starting-server");
-    console.error("Starting OpenCode server...");
+    progress.stage("Starting OpenCode server");
     await prepare(box, run);
     const created = await api<{ data: { id: string } }>(box, "/api/session", {
       location: { directory: project },
@@ -110,18 +114,20 @@ export async function start(options: Options, objective: string) {
     });
     run.sessionId = created.data.id;
     await saveRun(directory, run, "starting-goal");
-    console.error("Starting goal...");
+    progress.stage("Starting goal");
     await api(box, `/api/session/${run.sessionId}/command`, { name: "goal", text: goalObjective });
     const current = await goal(box, run);
     if (!current)
       throw new Error("Goal creation was not confirmed. Inspect status/logs before retrying.");
     await saveRun(directory, run, "started");
+    progress.finish();
     report(
       { boxId: run.boxId, sessionId: run.sessionId, goal: current },
       options.json,
       `Started ${run.boxId}\nSession: ${run.sessionId}\nUse longshot status, logs, or attach.`,
     );
   } catch (error) {
+    progress.finish(false);
     console.error(
       `Startup stopped at ${run.stage}. Resources are preserved; use status or destroy in this directory.`,
     );

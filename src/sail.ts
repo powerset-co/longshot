@@ -91,15 +91,25 @@ export async function command(box: Sailbox, args: string[], asUser = user, timeo
 
 // Setup output is progress, so both remote streams go to local stderr. Consume
 // them together while waiting: an unread pipe can otherwise block the command.
-export async function streamCommand(box: Sailbox, args: string[], options: ExecOptions) {
+export async function streamCommand(
+  box: Sailbox,
+  args: string[],
+  options: ExecOptions,
+  output?: (chunk: string, source: "stdout" | "stderr") => void | Promise<void>,
+) {
   const proc = await box.exec(args, { ...options, outputMode: "pipe" });
-  const forward = async (stream: AsyncIterable<string>) => {
+  const forward = async (stream: AsyncIterable<string>, source: "stdout" | "stderr") => {
     for await (const chunk of stream) {
-      if (!process.stderr.write(chunk)) await once(process.stderr, "drain");
+      if (output) await output(chunk, source);
+      else if (!process.stderr.write(chunk)) await once(process.stderr, "drain");
     }
   };
   try {
-    const [result] = await Promise.all([proc.wait(), forward(proc.stdout), forward(proc.stderr)]);
+    const [result] = await Promise.all([
+      proc.wait(),
+      forward(proc.stdout, "stdout"),
+      forward(proc.stderr, "stderr"),
+    ]);
     if (result.exitCode !== 0)
       throw new Error(`Setup command failed (${result.exitCode}). See the output above.`);
   } finally {

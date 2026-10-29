@@ -2,6 +2,27 @@ import { expect, spyOn, test } from "bun:test";
 import type { Sailbox } from "@sailresearch/sdk";
 import { streamCommand } from "../src/sail.ts";
 
+test("setup can forward both labeled pipes to the compact display", async () => {
+  const output: string[] = [];
+  const box = {
+    exec: async () => ({
+      stdout: (async function* () {
+        yield "Installing\n";
+      })(),
+      stderr: (async function* () {
+        yield "Warning\n";
+      })(),
+      wait: async () => ({ exitCode: 0 }),
+      close() {},
+    }),
+  } as unknown as Sailbox;
+  await streamCommand(box, ["bash", "setup.sh"], {}, async (chunk, source) => {
+    output.push(`${source}: ${chunk}`);
+  });
+  expect(output).toContain("stdout: Installing\n");
+  expect(output).toContain("stderr: Warning\n");
+});
+
 test("setup output reaches stderr before exit, with both streams consumed concurrently", async () => {
   const output: string[] = [];
   let finish!: (result: { exitCode: number }) => void;
