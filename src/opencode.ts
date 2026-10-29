@@ -22,6 +22,8 @@ export function configuration(
   return {
     model: "sail/coder",
     snapshots: false,
+    // Compact earlier so reasoning and the summary have room to finish.
+    compaction: { buffer: 32_768 },
     providers: {
       sail: {
         name: "Sail",
@@ -33,7 +35,8 @@ export function configuration(
           coder: {
             modelID: run.config.model,
             name: run.config.model,
-            limit: { context: 131_072, output: 16_384 },
+            // Reasoning shares this output allowance with the summary text.
+            limit: { context: 131_072, output: 32_768 },
           },
         },
       },
