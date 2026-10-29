@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { goal, latestActivity, type Goal } from "../src/opencode.ts";
 import { control, exportRun, status } from "../src/run.ts";
-import { createRun, newRun, readConfig } from "../src/state.ts";
+import { createRun, newRun, readConfig, saveRun } from "../src/state.ts";
 
 const directories: string[] = [];
 const mocks: { mockRestore(): void }[] = [];
@@ -94,6 +94,7 @@ test("status exposes the review reason and rounds without a model request", asyn
   const box = boxFor((url) => {
     if (url.pathname === "/api/rpc/opencode.goal/get") return { output: progress };
     if (url.pathname === "/api/session/active") return { data: {} };
+    if (url.pathname === "/api/session/session-1") return { data: { time: { created: 1000 } } };
     if (url.pathname === "/api/session/session-1/message")
       return {
         data: [
@@ -139,6 +140,66 @@ test("status does not report running when the execution query fails", async () =
   expect(process.exitCode).toBe(1);
   expect(output.mock.calls[0]![0]).toContain("Execution: unavailable");
   expect(output.mock.calls[0]![0]).toContain("Error: Execution query failed");
+});
+
+test("status measures session wall time, including pauses, and freezes it at completion", async () => {
+  const { options } = await fixture();
+  const created = 1_700_000_000_000;
+  const clock = spyOn(Date, "now").mockReturnValue(created + 272_999);
+  mocks.push(clock);
+  let current: Goal = { ...progress, status: "active", updatedAt: created + 60_000 };
+  const box = boxFor((url) => {
+    if (url.pathname === "/api/rpc/opencode.goal/get") return { output: current };
+    if (url.pathname === "/api/session/active") return { data: {} };
+    if (url.pathname === "/api/session/session-1") return { data: { time: { created } } };
+    if (/\/(permission|form|message)$/.test(url.pathname)) return { data: [] };
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  mocks.push(spyOn(Sailbox, "get").mockResolvedValue(box));
+  const output = spyOn(console, "log").mockImplementation(() => {});
+  mocks.push(output);
+  for (const state of ["active", "paused"] as const) {
+    current.status = state;
+    await status(options);
+    expect(JSON.parse(output.mock.calls.at(-1)![0]).elapsedMs).toBe(272_999);
+    await status({ ...options, json: false });
+    expect(output.mock.calls.at(-1)![0]).toContain("Elapsed: 4m 32s");
+  }
+  clock.mockReturnValue(created + 90_061_000);
+  await status({ ...options, json: false });
+  expect(output.mock.calls.at(-1)![0]).toContain("Elapsed: 1d 1h 1m 1s");
+  current = { ...current, status: "complete", updatedAt: created + 272_999 };
+  for (const later of [created + 300_000, created + 86_400_000]) {
+    clock.mockReturnValue(later);
+    await status(options);
+    expect(JSON.parse(output.mock.calls.at(-1)![0]).elapsedMs).toBe(272_999);
+  }
+  // A resumed goal counts the full wall time again. Small host/guest clock
+  // differences must never produce a negative duration.
+  current.status = "active";
+  await status(options);
+  expect(JSON.parse(output.mock.calls.at(-1)![0]).elapsedMs).toBe(86_400_000);
+  clock.mockReturnValue(created - 1000);
+  await status({ ...options, json: false });
+  expect(output.mock.calls.at(-1)![0]).toContain("Elapsed: 0s");
+});
+
+test("status leaves elapsed time unavailable before session creation", async () => {
+  const { run, options } = await fixture();
+  await saveRun(options.directory, { ...run, sessionId: undefined });
+  mocks.push(
+    spyOn(Sailbox, "get").mockResolvedValue(
+      boxFor(() => {
+        throw new Error("No session API should be called before session creation");
+      }),
+    ),
+  );
+  const output = spyOn(console, "log").mockImplementation(() => {});
+  mocks.push(output);
+  await status(options);
+  expect(JSON.parse(output.mock.calls.at(-1)![0]).elapsedMs).toBeNull();
+  await status({ ...options, json: false });
+  expect(output.mock.calls.at(-1)![0]).not.toContain("Elapsed:");
 });
 
 test("activity reads a bounded page and prefers a running parallel tool", async () => {

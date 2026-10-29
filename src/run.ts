@@ -145,6 +145,7 @@ interface RunStatus {
   sandbox: string;
   goal: Goal | null;
   activity: Activity | null;
+  elapsedMs: number | null;
   execution: unknown;
   permissions?: unknown[];
   forms?: unknown[];
@@ -162,6 +163,7 @@ export async function status(options: Options) {
     sandbox: run.destroyedAt ? "terminated" : "not-confirmed",
     goal: null,
     activity: null,
+    elapsedMs: null,
     execution: null,
   };
   if (run.boxId && !run.destroyedAt) {
@@ -179,6 +181,14 @@ export async function status(options: Options) {
           await api<{ data: unknown[] }>(box, `/api/session/${run.sessionId}/form`)
         ).data;
         result.activity = await latestActivity(box, run.sessionId);
+        const info = await api<{ data: { time: { created: number } } }>(
+          box,
+          `/api/session/${run.sessionId}`,
+        );
+        // Session creation excludes sandbox setup. Only completion stops this
+        // wall-clock duration; pauses and waiting time still count.
+        const end = result.goal?.status === "complete" ? result.goal.updatedAt : Date.now();
+        result.elapsedMs = Math.max(0, end - info.data.time.created);
       }
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);
@@ -191,6 +201,7 @@ export async function status(options: Options) {
     `Session: ${run.sessionId ?? "not created"}`,
     `Goal: ${result.goal?.status ?? "unavailable"}`,
   ];
+  if (result.elapsedMs !== null) lines.push(`Elapsed: ${duration(result.elapsedMs)}`);
   if (result.goal) {
     const current = result.goal;
     lines.push(`Rounds: ${current.rounds} / ${current.maxRounds}`);
@@ -208,6 +219,16 @@ export async function status(options: Options) {
   if (result.forms?.length) lines.push(`Pending questions: ${result.forms.length}`);
   if (result.error) lines.push(`Error: ${result.error}`);
   report(result, options.json, lines.join("\n"));
+}
+
+function duration(milliseconds: number) {
+  const seconds = Math.floor(milliseconds / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor(seconds / 3600) % 24;
+  const minutes = Math.floor(seconds / 60) % 60;
+  return [days && `${days}d`, hours && `${hours}h`, minutes && `${minutes}m`, `${seconds % 60}s`]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export async function control(
