@@ -42,8 +42,12 @@ async function install(version: string) {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    return { code, stderr };
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { code, stdout, stderr };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -52,7 +56,10 @@ async function install(version: string) {
 test("setup replaces preinstalled OpenCode and accepts both version formats", async () => {
   for (const version of [`opencode v${versions.opencode}`, versions.opencode]) {
     const result = await install(version);
-    expect(result).toEqual({ code: 0, stderr: "" });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(`Downloading OpenCode ${versions.opencode}...`);
+    expect(result.stdout).toContain(`OpenCode ${versions.opencode} installed.`);
   }
 });
 

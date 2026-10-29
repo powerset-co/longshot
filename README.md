@@ -73,7 +73,7 @@ Your project files are in `result/workspace`; session history and logs are in `r
 
 All commands support `--directory path` (`-C`) and `--json`, except that `attach` requires a terminal and rejects `--json`. Without `--directory`, only the current directory is checked; parent directories are not searched.
 
-`--json` emits a single JSON result for ordinary commands and one session event per line for `logs`. Progress and errors go to stderr. Errors have a nonzero exit status; a successful `status` query may describe an incomplete or paused goal. JSON errors have an `error` field. A disconnected log stream errors; rerun the command to reconnect.
+`--json` emits a single JSON result for ordinary commands and one session event per line for `logs`. Progress and errors go to stderr. During `start`, installation and optional setup-script output stream there as they arrive; stdout stays reserved for the final result. `start` returns once the remote goal is confirmed. Errors have a nonzero exit status; a successful `status` query may describe an incomplete or paused goal. JSON errors have an `error` field. A disconnected log stream errors; rerun the command to reconnect.
 
 Pausing controls the **goal**, not the VM. If you pause the entire VM through Sail, resume it through Sail before using commands that need guest access. `destroy` works on a paused box. A shared Sail app named `longshot` groups resources; the app is retained after cleanup and is not a local run registry.
 

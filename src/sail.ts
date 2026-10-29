@@ -9,7 +9,9 @@ import {
   Sailbox,
   Secret,
   type EgressPolicyDocument,
+  type ExecOptions,
 } from "@sailresearch/sdk";
+import { once } from "node:events";
 import type { Run } from "./state.ts";
 
 export const home = "/home/longshot";
@@ -86,6 +88,25 @@ export async function command(box: Sailbox, args: string[], asUser = user, timeo
   if (result.stdoutTruncated) throw new Error("Guest response exceeded the output limit.");
   return result.stdout;
 }
+
+// Setup output is progress, so both remote streams go to local stderr. Consume
+// them together while waiting: an unread pipe can otherwise block the command.
+export async function streamCommand(box: Sailbox, args: string[], options: ExecOptions) {
+  const proc = await box.exec(args, { ...options, outputMode: "pipe" });
+  const forward = async (stream: AsyncIterable<string>) => {
+    for await (const chunk of stream) {
+      if (!process.stderr.write(chunk)) await once(process.stderr, "drain");
+    }
+  };
+  try {
+    const [result] = await Promise.all([proc.wait(), forward(proc.stdout), forward(proc.stderr)]);
+    if (result.exitCode !== 0)
+      throw new Error(`Setup command failed (${result.exitCode}). See the output above.`);
+  } finally {
+    proc.close();
+  }
+}
+
 async function ignoreMissing(operation: () => Promise<unknown>) {
   try {
     await operation();

@@ -15,6 +15,7 @@ import {
   provisionBox,
   quote,
   session,
+  streamCommand,
   user,
 } from "./sail.ts";
 import {
@@ -79,24 +80,27 @@ export async function start(options: Options, objective: string) {
     await saveRun(directory, run, "setting-up");
     console.error(`Sailbox ${run.boxId}: installing OpenCode ${versions.opencode}...`);
     await box.fs.write("/tmp/longshot-setup.sh", setupScript, { mode: 0o700 });
-    await command(box, ["bash", "/tmp/longshot-setup.sh", run.versions.opencode], "0:0", 1200);
+    await streamCommand(box, ["bash", "/tmp/longshot-setup.sh", run.versions.opencode], {
+      user: "0:0",
+      cwd: "/",
+      timeoutSeconds: 1200,
+    });
+    console.error("Uploading project files...");
     await box.fs.uploadDir({ localDir: upload, guestDir: project, user });
     await rm(upload, { recursive: true, force: true });
     await box.fs.write(`${session}/goal.md`, objective, { user });
     if (customSetup !== null) {
+      console.error("Running project setup...");
       await box.fs.write(`${session}/setup.sh`, customSetup, { user, mode: 0o700 });
-      const result = await box.run(["bash", "-e", `${session}/setup.sh`], {
+      await streamCommand(box, ["bash", "-e", `${session}/setup.sh`], {
         cwd: project,
         user,
         env: config.env,
         timeoutSeconds: 1200,
       });
-      console.error(result.stdout);
-      console.error(result.stderr);
-      if (result.exitCode !== 0)
-        throw new Error(`Project setup failed (${result.exitCode}). Sailbox preserved.`);
     }
     await saveRun(directory, run, "starting-server");
+    console.error("Starting OpenCode server...");
     await prepare(box, run);
     const created = await api<{ data: { id: string } }>(box, "/api/session", {
       location: { directory: project },
@@ -106,6 +110,7 @@ export async function start(options: Options, objective: string) {
     });
     run.sessionId = created.data.id;
     await saveRun(directory, run, "starting-goal");
+    console.error("Starting goal...");
     await api(box, `/api/session/${run.sessionId}/command`, { name: "goal", text: goalObjective });
     const current = await goal(box, run);
     if (!current)
