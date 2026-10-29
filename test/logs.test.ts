@@ -12,6 +12,10 @@ test("logs show reasoning and tool activity, filter sessions, and preserve JSON"
     { type: "session.reasoning.ended", data: { sessionID: "ours" } },
     { type: "session.tool.input.started", data: { sessionID: "ours", name: "write" } },
     { type: "session.tool.success", data: { sessionID: "ours", name: "write" } },
+    {
+      type: "rpc.opencode.goal.changed",
+      data: { sessionID: "ours", goal: { status: "complete", reason: "All tests pass." } },
+    },
     { type: "session.execution.succeeded", data: { sessionID: "ours" } },
   ];
   for (const json of [false, true]) {
@@ -59,6 +63,7 @@ test("logs show reasoning and tool activity, filter sessions, and preserve JSON"
         expect(text).toContain("session.tool.input.started");
         expect(text).toContain("session.tool.success");
         expect(text).toContain("session.execution.succeeded");
+        expect(text).toContain("[goal.complete] All tests pass.");
       }
     } finally {
       stdout.mockRestore();

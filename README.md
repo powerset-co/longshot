@@ -32,12 +32,12 @@ Set your key and move into the project you want the agent to work on:
 ```sh
 export SAIL_API_KEY='your-key'
 cd my-project
-longshot start 'Build a simple Go CLI that prints the first 10000 fibonacci numbers.' --budget 10
+longshot start 'Build a simple Go CLI that prints the first 10000 fibonacci numbers.'
 ```
 
-For a longer specification, write it in `GOAL.md` and use `longshot start --file GOAL.md`. A budget is optional and estimates **inference only**; there is no budget by default. Sandbox compute is billed separately.
+For a longer specification, write it in `GOAL.md` and use `longshot start --file GOAL.md`. Longshot does not enforce a spending limit. You are responsible for monitoring inference and Sailbox compute charges and stopping the run when needed.
 
-`start` begins the project in a new Sailbox and returns once the remote goal is confirmed. You can close your terminal and check back later:
+`start` begins the project in a new Sailbox and returns once the remote goal is confirmed. The full specification is saved to `/home/longshot/session/goal.md`; a short native objective references that file, so long specifications are not truncated to OpenCode's 4,000-character objective limit. You can close your terminal and check back later:
 
 ```sh
 longshot status
@@ -62,12 +62,12 @@ Your project files are in `result/workspace`; session history and logs are in `r
 | Command                                  | Behavior                                                                                                                   |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `start "goal"` / `start --file GOAL.md`  | Upload this directory and start a goal. Refuses an existing run record.                                                    |
-| `status`                                 | Read sandbox health, persisted goal progress, usage, pending permissions/forms, and execution activity. No inference call. |
+| `status`                                 | Read sandbox health, goal progress, recent activity, pending permissions/forms, and execution activity. No inference call. |
 | `logs`                                   | Stream new text, reasoning, tool activity, and execution status. No history replay. Ctrl+C closes the reader only.         |
 | `message "text"` / `message --file path` | Queue guidance in the existing session. Acceptance does not mean the agent has acted on it.                                |
 | `attach`                                 | Open the remote OpenCode TUI in this terminal. Ctrl+X, then Q exits the TUI without stopping the server.                   |
 | `pause`                                  | Pause goal continuation. An in-flight model/tool call may finish; compute remains running.                                 |
-| `resume`                                 | Request goal continuation and verify its state. Does not reset or increase an exhausted token budget.                      |
+| `resume`                                 | Resume goal continuation with a fresh 50-round allowance.                                                                  |
 | `export [--output path]`                 | Download the complete workspace and session data into a fresh directory.                                                   |
 | `destroy --yes`                          | Terminate the Sailbox, delete this run's saved policy, then delete its inference secret. Preserve local state/exports.     |
 
@@ -94,7 +94,7 @@ Everything is optional. Put `longshot.json` in the working directory:
 }
 ```
 
-Remove `setup` and `egressPolicyFile` if those files do not exist. CLI flags `--model`, `--window`, `--size`, and `--setup` override these values. Sizes are `s`, `m`, `l`; windows are `asap`, `balanced`, `flex`. Budget is supplied explicitly using `--budget`, never enabled by default.
+Remove `setup` and `egressPolicyFile` if those files do not exist. CLI flags `--model`, `--window`, `--size`, and `--setup` override these values. Sizes are `s`, `m`, `l`; windows are `asap`, `balanced`, `flex`.
 
 The guest is an AMD64 Debian Sailbox with Git, curl, archive tools, a C/C++ toolchain, Python, Node, npm, and pinned OpenCode. Project files live in `/home/longshot/project`; OpenCode runs as the ordinary `longshot` user. A setup script runs there before inference, with a 20-minute timeout. Install language-specific tools/dependencies into the user's home or workspace. The configured `env` is passed to setup and OpenCode; host environment variables are not forwarded.
 
@@ -124,21 +124,19 @@ Point `egressPolicyFile` at that JSON file. Longshot saves a new per-run policy 
 
 Sail credential injection applies to HTTPS headers/query parameters; it does **not** materialize secret-valued environment variables. `env` is for non-secret configuration and appears in run state and exports. [Sail credential documentation](https://docs.sailresearch.com/sailboxes-credentials)
 
-## Approximate inference budgets
+## Monitoring costs
 
-`--budget 50` converts $50 to a token limit for the goal plugin. It assumes 90% input and 10% output tokens, ignores cache discounts, and saves the rates and assumptions used at launch. Bundled rates are dated in `src/pricing.ts`. For another model, supply USD per million tokens in configuration:
+Monitor inference and compute charges through Sail. Use `longshot pause` to pause goal continuation; an in-flight call may finish. Sailbox compute continues after a goal pauses or completes. Export your results, then use `longshot destroy --yes` to remove the remote resources.
 
-```json
-{ "pricing": { "input": 0.5, "output": 2.5 } }
-```
+OpenCode's native goal mode reviews progress whenever the session would finish. It continues until the reviewer confirms completion, or pauses because it needs help, encounters an error, stops making progress, or reaches 50 continuation rounds. `longshot resume` starts a fresh round allowance. A server restart also pauses an active goal. `status` reports the current state, round count, and latest goal update (reviewer feedback or a pause/error reason). It also reads up to three recent assistant messages to show a short text, reasoning, or tool activity excerpt. `Recorded` is OpenCode's timestamp for that activity, not the time you polled; an in-flight response may still show its start time. `--json` includes this as `activity` with `type`, `summary`, and `recordedAt` (Unix milliseconds), or `null` before output is available. These reads make no inference requests. `logs` includes goal-state changes. The reviewer makes additional inference requests using the same Sail model.
 
-This is a stopping aid, not a hard dollar cap. Actual input/output proportions, cache usage, auxiliary inference, and the final handoff change spending. A request can cross the token limit before the plugin stops continuation. Monitor your Sail charges. Sandbox compute is separate and continues after the goal stops.
+Longshot does not impose a spending limit, duration limit, or VM expiry. Native goal status does not include token usage or dollar estimates; monitor those through Sail.
 
-Budgeted runs disable OpenCode subagent delegation because child-session accounting has not been verified against the parent goal's budget. Runs without a budget use the ordinary delegation permissions. Changing the model or configuration manually in an attached session can invalidate the estimate. There is no mid-run budget editing command.
-
-The plugin has a separate 5,000-continuation ceiling and its normal no-progress/failure guards. An explicit resume can reopen an automatic-turn window; it does not reset token usage. No duration limit or VM expiry is imposed by Longshot.
+The former `--budget` flag and `pricing` configuration are no longer supported. Remove `pricing` from `longshot.json` before starting a new run. Existing remote sessions retain any token limits configured when they launched.
 
 ## Files and recovery
+
+Runs created with the external goal plugin are not migrated. Use their original Longshot binary for `status`, `pause`, `resume`, and `export`. The new binary can still `attach`, stream `logs`, send a `message`, or `destroy` those runs. Start a fresh run to use native goal mode.
 
 Upload includes uncommitted and untracked files. It does not use `.gitignore`. Longshot excludes `.longshot`, `.git`, `node_modules`, `.DS_Store`, and `.env`/`.env.*` files at any depth, except `.env.example`, `.env.sample`, and `.env.template`. `exclude` adds Bun glob patterns relative to the working directory. Excluding a directory excludes its descendants. Relative symlinks within the upload are copied as links. Recursive links, links outside the project, absolute links, and links into excluded files are rejected before provisioning; copy their inputs into the project or explicitly exclude those links.
 
@@ -181,12 +179,12 @@ Read the modules in this order:
 2. `src/run.ts`: the linear launch sequence and commands.
 3. `src/sail.ts`: cloud operations, credential policy, and cleanup.
 4. `src/opencode.ts`: generated config, localhost HTTP calls, goal state, live events.
-5. `src/state.ts` and `src/pricing.ts`: local files and budget estimation.
+5. `src/state.ts`: local configuration, run records, and upload staging.
 6. `src/guest-setup.sh`: the guest's OS/runtime setup.
 
-The two runtime dependencies are Sail's SDK and citty. Citty generates help from the command definitions; a small validation step uses Bun's `node:util.parseArgs` to reject unknown flags and extra arguments before dispatch. Run `longshot --help` or `longshot start --help` for usage. OpenCode **2.2.0**, goal plugin **0.1.84**, and Sail SDK **0.17.1** are pinned. The standalone binary is built on each target OS/architecture so the SDK's native library is bundled correctly.
+The two runtime dependencies are Sail's SDK and citty. Citty generates help from the command definitions; a small validation step uses Bun's `node:util.parseArgs` to reject unknown flags and extra arguments before dispatch. Run `longshot --help` or `longshot start --help` for usage. OpenCode **2.2.1** and Sail SDK **0.17.1** are pinned. Goal mode is built into OpenCode; no external goal plugin is installed. The standalone binary is built on each target OS/architecture so the SDK's native library is bundled correctly.
 
-The local tests cover boundaries where a mistake could lose work, expose files, or start an unintended run: exclusive run creation, recovery IDs, upload filtering and links, cleanup ordering, budget conversion, event framing, and CLI help/errors. They use temporary directories and mocked Sail operations; they do not create cloud resources. CLI tests also check that misspelled flags fail before provisioning and that JSON output remains usable by agents. Installer tests run the actual setup shell in a temporary filesystem, including replacement of a preinstalled executable and both OpenCode version-output formats.
+The local tests cover boundaries where a mistake could lose work, expose files, or start an unintended run: exclusive run creation, recovery IDs, upload filtering and links, cleanup ordering, native goal API calls, pause/export guards, event framing, and CLI help/errors. They use temporary directories and mocked Sail operations; they do not create cloud resources. CLI tests also check that misspelled flags fail before provisioning and that JSON output remains usable by agents. Installer tests run the actual setup shell in a temporary filesystem, including replacement of a preinstalled executable and both OpenCode version-output formats.
 
 ## Publishing a release
 
@@ -196,8 +194,8 @@ Release assets live in [powerset-co/longshot](https://github.com/powerset-co/lon
 2. Push the matching tag, for example:
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
 3. GitHub Actions checks that the tag matches `package.json`, runs the tests, builds macOS/Linux ARM64/x64 archives, and tests each extracted binary outside the checkout without `node_modules`.

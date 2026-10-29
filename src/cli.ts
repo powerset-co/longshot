@@ -29,15 +29,10 @@ const input = {
   file: { type: "string", alias: "f", description: "Read text from a file instead" },
 } satisfies ArgsDef;
 
-// Keep path resolution and numeric conversion at the CLI boundary. Configuration
-// and budget validation live with the code that also reads longshot.json.
-function options(args: { directory?: string; json?: boolean; budget?: string }): Options {
-  return {
-    ...args,
-    directory: resolve(args.directory ?? process.cwd()),
-    json: args.json ?? false,
-    budget: args.budget === undefined ? undefined : Number(args.budget),
-  };
+// Resolve the run directory at the CLI boundary. Configuration validation lives
+// with the code that also reads longshot.json.
+function options(args: { directory?: string; json?: boolean }): Options {
+  return { ...args, directory: resolve(args.directory ?? process.cwd()), json: args.json ?? false };
 }
 
 const commands = {
@@ -46,10 +41,6 @@ const commands = {
     args: {
       ...common,
       ...input,
-      budget: {
-        type: "string",
-        description: "Approximate inference budget in dollars (default: none)",
-      },
       model: { type: "string", description: "Sail model ID" },
       window: {
         type: "enum",
@@ -93,7 +84,7 @@ const commands = {
     run: ({ args }) => control("pause", options(args)),
   }),
   resume: defineCommand({
-    meta: { description: "Resume goal continuation within its original budget" },
+    meta: { description: "Resume goal continuation" },
     args: common,
     run: ({ args }) => control("resume", options(args)),
   }),
@@ -122,7 +113,7 @@ const root = defineCommand({
 });
 
 // Citty accepts unknown flags and extra positionals. Derive a strict Bun/Node
-// parser from the same definitions so a typo cannot silently disable a budget.
+// parser from the same definitions so misspelled options fail before dispatch.
 function flags(definitions: ArgsDef): ParseArgsOptionsConfig {
   const result: ParseArgsOptionsConfig = {};
   for (const [name, arg] of Object.entries(definitions)) {

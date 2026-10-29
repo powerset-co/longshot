@@ -13,9 +13,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { estimateBudget, type Budget } from "./pricing.ts";
 
-export const versions = { opencode: "2.2.0", goal: "0.1.84" };
+export const versions = { opencode: "2.2.1" };
 export interface Config {
   model: string;
   window: "asap" | "balanced" | "flex";
@@ -25,7 +24,6 @@ export interface Config {
   env: Record<string, string>;
   exclude: string[];
   egressPolicyFile?: string;
-  pricing?: { input: number; output: number };
 }
 export interface Run {
   version: 1;
@@ -34,7 +32,6 @@ export interface Run {
   stage: string;
   config: Config;
   versions: typeof versions;
-  budget?: Budget;
   secretName: string;
   policyId?: string;
   boxId?: string;
@@ -65,7 +62,6 @@ export async function readConfig(
     "env",
     "exclude",
     "egressPolicyFile",
-    "pricing",
   ];
   for (const key of Object.keys(raw))
     if (!allowed.includes(key)) throw new Error(`Unknown configuration key: ${key}`);
@@ -101,19 +97,10 @@ export async function readConfig(
     )
       throw new Error(`Reserved environment variable: ${key}`);
   }
-  if (
-    config.pricing !== undefined &&
-    (!config.pricing ||
-      !Number.isFinite(config.pricing.input) ||
-      config.pricing.input <= 0 ||
-      !Number.isFinite(config.pricing.output) ||
-      config.pricing.output <= 0)
-  )
-    throw new Error("pricing requires positive input and output rates.");
   return config;
 }
 
-export function newRun(config: Config, dollars?: number): Run {
+export function newRun(config: Config): Run {
   const name = `longshot-${crypto.randomUUID()}`;
   return {
     version: 1,
@@ -122,7 +109,6 @@ export function newRun(config: Config, dollars?: number): Run {
     stage: "prepared",
     config,
     versions,
-    budget: estimateBudget(dollars, config.model, config.window, config.pricing),
     secretName: name,
   };
 }
@@ -222,9 +208,5 @@ export async function readInput(directory: string, text?: string, file?: string)
   if (!!text === !!file) throw new Error("Supply text or --file, but not both.");
   const content = file ? await readFile(resolve(directory, file), "utf8") : text!;
   if (!content.trim()) throw new Error("Input cannot be empty.");
-  if ([...content].length > 100_000)
-    throw new Error(
-      "Input exceeds the goal plugin's 100,000-character limit; put supporting material in project files.",
-    );
   return content;
 }

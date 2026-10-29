@@ -49,7 +49,7 @@ async function install(version: string) {
 }
 
 test("setup replaces preinstalled OpenCode and accepts both version formats", async () => {
-  for (const version of ["opencode v2.2.0", "2.2.0"]) {
+  for (const version of ["opencode v2.2.1", "2.2.1"]) {
     const result = await install(version);
     expect(result).toEqual({ code: 0, stderr: "" });
   }
@@ -58,5 +58,5 @@ test("setup replaces preinstalled OpenCode and accepts both version formats", as
 test("setup reports the actual version when the pin does not match", async () => {
   const result = await install("opencode v1.0.0");
   expect(result.code).toBe(1);
-  expect(result.stderr).toContain("Expected OpenCode 2.2.0, got: opencode v1.0.0");
+  expect(result.stderr).toContain("Expected OpenCode 2.2.1, got: opencode v1.0.0");
 });

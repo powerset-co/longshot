@@ -1,24 +1,28 @@
 // OpenCode listens only inside the Sailbox. HTTP requests travel through Sail
 // exec + guest curl; there is no public server, local proxy, or background daemon.
 import type { Sailbox } from "@sailresearch/sdk";
+import { stripVTControlCharacters } from "node:util";
 import type { Run } from "./state.ts";
-import { command, home, project, quote, session, user } from "./sail.ts";
+import { home, project, quote, session, user } from "./sail.ts";
 
 export interface Goal {
-  status: string;
+  id: string;
+  status: "active" | "paused" | "complete";
   objective: string;
-  tokensUsed: number;
-  tokenBudget: number | null;
-  autoTurns: number;
-  timeUsedSeconds: number;
-  stopReason?: string | null;
-  lastCheckpoint?: { summary: string; timestamp: number } | null;
-  [key: string]: unknown;
+  reason?: string;
+  rounds: number;
+  maxRounds: number;
+  stalls?: number;
+  boot: string;
+  updatedAt: number;
 }
-export function configuration(
-  run: Run,
-  plugin = `@prevalentware/opencode-goal-plugin@${run.versions.goal}`,
-) {
+const location = `?location%5Bdirectory%5D=${encodeURIComponent(project)}`;
+
+// Native objectives are limited to 4,000 characters. Keep the complete user
+// specification in a file, and give both the agent and reviewer a stable reference.
+export const goalObjective = `Complete the task described in ${session}/goal.md. Read that file before working, satisfy all of its requirements, and verify the result with appropriate tests before declaring completion.`;
+
+export function configuration(run: Run) {
   return {
     model: "sail/coder",
     snapshots: false,
@@ -32,22 +36,10 @@ export function configuration(
         models: { coder: { modelID: run.config.model, name: run.config.model } },
       },
     },
-    plugins: [
-      {
-        package: plugin,
-        options: {
-          auto_continue: true,
-          max_auto_turns: 5000,
-          ...(run.budget ? { default_token_budget: run.budget.tokens } : {}),
-        },
-      },
-    ],
     permissions: [
       { action: "*", resource: "*", effect: "allow" },
       // A headless question otherwise waits indefinitely. The goal can report a blocker.
       { action: "question", resource: "*", effect: "deny" },
-      // Child-session usage is not proven to be included in goal accounting.
-      ...(run.budget ? [{ action: "subagent", resource: "*", effect: "deny" }] : []),
     ],
   };
 }
@@ -63,7 +55,6 @@ export async function prepare(box: Sailbox, run: Run) {
     XDG_CACHE_HOME: `${session}/cache`,
     XDG_STATE_HOME: `${session}/state`,
     OPENCODE_DB: `${session}/opencode.db`,
-    OPENCODE_GOAL_STATE_PATH: `${session}/goals.json`,
     OPENCODE_PASSWORD: password,
     SAIL_INFERENCE_PLACEHOLDER: "injected-by-sail",
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
@@ -72,12 +63,7 @@ export async function prepare(box: Sailbox, run: Run) {
     user,
     mode: 0o600,
   });
-  await box.fs.write(
-    `${session}/config/opencode/cli.json`,
-    JSON.stringify({ plugins: [`@prevalentware/opencode-goal-plugin@${run.versions.goal}`] }),
-    { user },
-  );
-  // A remote wrapper gives server, installer, and attached TUI identical paths.
+  // A remote wrapper gives the server and attached TUI identical paths.
   // Its credential is only for localhost OpenCode, never the Sail API key.
   const wrapper =
     "#!/bin/bash\nset -e\n" +
@@ -90,18 +76,6 @@ export async function prepare(box: Sailbox, run: Run) {
     user,
     mode: 0o600,
   });
-  // Install both entrypoints before starting the server (including the TUI plugin).
-  await command(
-    box,
-    [
-      `${session}/opencode`,
-      "plugin",
-      "add",
-      `@prevalentware/opencode-goal-plugin@${run.versions.goal}`,
-    ],
-    user,
-    600,
-  );
   const launch = await box.exec(
     `${quote(session + "/opencode")} serve --hostname 127.0.0.1 --port 4096 >${quote(session + "/server.log")} 2>&1`,
     { user, cwd: project, background: true },
@@ -112,27 +86,19 @@ export async function prepare(box: Sailbox, run: Run) {
   } finally {
     launch.close();
   }
-  const location = `?location%5Bdirectory%5D=${encodeURIComponent(project)}`;
+  // Built-in plugins activate asynchronously, so a listening server alone is
+  // not sufficient: wait until the native goal command has registered.
   await until(
     async () => {
       try {
         await api(box, "/api/info");
         const commands = await api<{ data: { name: string }[] }>(box, "/api/command" + location);
-        const plugins = await api<{ data: { id: string; state?: { status: string } }[] }>(
-          box,
-          "/api/plugin" + location,
-        );
-        return (
-          commands.data.some((x) => x.name === "goal") &&
-          plugins.data.some(
-            (x) => x.id === "local.goal-mode.server" && x.state?.status === "active",
-          )
-        );
+        return commands.data.some((x) => x.name === "goal");
       } catch {
         return false;
       }
     },
-    "OpenCode/plugin did not become ready. Inspect the exported session/server.log.",
+    "OpenCode goal mode did not become ready. Inspect the exported session/server.log.",
     120_000,
   );
 }
@@ -179,14 +145,81 @@ export async function api<T = unknown>(box: Sailbox, path: string, body?: unknow
     proc.close();
   }
 }
-// The plugin persists progress after each turn. Reading this file costs no
-// inference and works independently of the running model request.
-export async function goal(box: Sailbox, id: string): Promise<Goal | null> {
-  if (!(await box.fs.exists(`${session}/goals.json`))) return null;
-  const state = JSON.parse(Buffer.from(await box.fs.read(`${session}/goals.json`)).toString());
-  if (![1, 2, 3].includes(state.version)) throw new Error("Unsupported goal state format.");
-  return state.goals?.[id] ?? null;
+// OpenCode owns persistence. This RPC reads its goal state without inference.
+export async function goal(box: Sailbox, run: Run): Promise<Goal | null> {
+  // Old runs remain on their original server/plugin. Do not silently migrate
+  // them or mistake a missing native goal for permission to export active work.
+  if ("goal" in run.versions)
+    throw new Error(
+      "This run uses the legacy goal plugin. Use its original Longshot binary for status, pause/resume, and export. Attach, logs, message, and destroy still work.",
+    );
+  const result = await api<{ output: Goal | null }>(box, "/api/rpc/opencode.goal/get" + location, {
+    input: { sessionID: run.sessionId },
+  });
+  return result.output;
 }
+
+export interface Activity {
+  type: "text" | "reasoning" | "tool";
+  summary: string;
+  recordedAt: number;
+}
+
+// Only the fields needed for a short status line, from OpenCode's message API.
+interface AssistantMessage {
+  time: { created: number; streamed?: number; completed?: number };
+  content: (
+    | { type: "text"; text: string }
+    | { type: "reasoning"; text: string; time?: { created: number; completed?: number } }
+    | {
+        type: "tool";
+        name: string;
+        state: { status: string; input: string | Record<string, unknown> };
+        time: { created: number; ran?: number; completed?: number };
+      }
+  )[];
+}
+
+export async function latestActivity(box: Sailbox, id: string): Promise<Activity | null> {
+  const result = await api<{ data: AssistantMessage[] }>(
+    box,
+    `/api/session/${id}/message?type=assistant&order=desc&limit=3`,
+  );
+  // A newly started step may have no content yet. Look back a few messages,
+  // without fetching the whole conversation or creating a local event cache.
+  for (const message of result.data) {
+    const parts = [...message.content].reverse();
+    // Parallel tools can finish out of order; show any still-running tool first.
+    const running = parts.find(
+      (part) => part.type === "tool" && ["running", "streaming"].includes(part.state.status),
+    );
+    for (const part of running ? [running, ...parts] : parts) {
+      let summary: string;
+      let recordedAt = message.time.streamed ?? message.time.completed ?? message.time.created;
+      if (part.type === "tool") {
+        const input = typeof part.state.input === "object" ? part.state.input : {};
+        const detail = [input.path, input.command, input.pattern, input.description].find(
+          (value) => typeof value === "string" && value.trim(),
+        );
+        summary = `${part.name} (${part.state.status})${detail ? `: ${detail}` : ""}`;
+        recordedAt = part.time.completed ?? part.time.ran ?? part.time.created;
+      } else {
+        summary = part.text;
+        if (part.type === "reasoning" && part.time)
+          recordedAt = part.time.completed ?? part.time.created;
+      }
+      summary = stripVTControlCharacters(summary).replace(/\s+/g, " ").trim();
+      if (!summary) continue;
+      return {
+        type: part.type,
+        summary: summary.length > 240 ? summary.slice(0, 237) + "..." : summary,
+        recordedAt,
+      };
+    }
+  }
+  return null;
+}
+
 export async function until(
   check: () => Promise<boolean>,
   failure: string,
@@ -235,6 +268,14 @@ export async function logs(box: Sailbox, id: string, json: boolean) {
     for await (const event of events(proc.stdout)) {
       if (event.data?.sessionID !== id) continue;
       if (json) console.log(JSON.stringify(event));
+      else if (event.type === "rpc.opencode.goal.changed") {
+        const current = event.data.goal as Goal | null;
+        console.log(
+          current
+            ? `[goal.${current.status}] ${current.reason ?? current.objective}`
+            : "[goal.cleared]",
+        );
+      }
       // Models can spend minutes emitting only reasoning. Include that stream
       // so an active session does not look like a hung log reader.
       else if (event.type === "session.reasoning.started") process.stdout.write("[thinking]\n");

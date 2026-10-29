@@ -17,13 +17,20 @@ import {
   session,
   user,
 } from "./sail.ts";
-import { api, goal, logs, prepare, until, type Goal } from "./opencode.ts";
-import type { Budget } from "./pricing.ts";
+import {
+  api,
+  goal,
+  goalObjective,
+  latestActivity,
+  logs,
+  prepare,
+  type Activity,
+  type Goal,
+} from "./opencode.ts";
 
 export interface Options {
   directory: string;
   json: boolean;
-  budget?: number;
   model?: string;
   window?: string;
   size?: string;
@@ -46,7 +53,7 @@ export async function start(options: Options, objective: string) {
     size: options.size,
     setup: options.setup,
   });
-  const run = newRun(config, options.budget);
+  const run = newRun(config);
   const apiClient = client();
   const customSetup = config.setup
     ? await readFile(resolve(directory, config.setup), "utf8")
@@ -99,23 +106,15 @@ export async function start(options: Options, objective: string) {
     });
     run.sessionId = created.data.id;
     await saveRun(directory, run, "starting-goal");
-    await api(box, `/api/session/${run.sessionId}/command`, { name: "goal", text: objective });
-    await until(
-      async () => !!(await goal(box, run.sessionId!)),
-      "Goal submission was accepted but creation was not confirmed. Inspect status/logs before sending another message.",
-    );
-    const current = (await goal(box, run.sessionId))!;
-    if (current.tokenBudget !== (run.budget?.tokens ?? null)) {
-      await api(box, `/api/session/${run.sessionId}/command`, { name: "pause_goal", text: "" });
-      throw new Error(
-        "The model created a goal with an unexpected token budget. Paused continuation; inspect the session.",
-      );
-    }
+    await api(box, `/api/session/${run.sessionId}/command`, { name: "goal", text: goalObjective });
+    const current = await goal(box, run);
+    if (!current)
+      throw new Error("Goal creation was not confirmed. Inspect status/logs before retrying.");
     await saveRun(directory, run, "started");
     report(
-      { boxId: run.boxId, sessionId: run.sessionId, goal: current, budget: run.budget ?? null },
+      { boxId: run.boxId, sessionId: run.sessionId, goal: current },
       options.json,
-      `Started ${run.boxId}\nSession: ${run.sessionId}\nBudget: ${run.budget ? `approximately $${run.budget.dollars} (${run.budget.tokens.toLocaleString()} tokens)` : "none"}\nUse longshot status, logs, or attach.`,
+      `Started ${run.boxId}\nSession: ${run.sessionId}\nUse longshot status, logs, or attach.`,
     );
   } catch (error) {
     console.error(
@@ -125,18 +124,17 @@ export async function start(options: Options, objective: string) {
   }
 }
 
-// Only fields used by status are projected from the plugin's larger history.
+// Status combines native goal progress with the server's execution activity.
 interface RunStatus {
   name: string;
   stage: string;
   boxId: string | null;
   sessionId: string | null;
-  budget: Budget | null;
   versions: typeof versions;
   sandbox: string;
   goal: Goal | null;
+  activity: Activity | null;
   execution: unknown;
-  estimatedInferenceDollars?: number;
   permissions?: unknown[];
   forms?: unknown[];
   error?: string;
@@ -149,10 +147,10 @@ export async function status(options: Options) {
     stage: run.stage,
     boxId: run.boxId ?? null,
     sessionId: run.sessionId ?? null,
-    budget: run.budget ?? null,
     versions: run.versions,
     sandbox: run.destroyedAt ? "terminated" : "not-confirmed",
     goal: null,
+    activity: null,
     execution: null,
   };
   if (run.boxId && !run.destroyedAt) {
@@ -160,24 +158,7 @@ export async function status(options: Options) {
       const box = await Sailbox.get(run.boxId, { client: client() });
       result.sandbox = box.status;
       if (box.status === "running" && run.sessionId) {
-        const current = await goal(box, run.sessionId);
-        // Status is a compact observation, not a dump of the entire goal history.
-        result.goal = current && {
-          status: current.status,
-          objective: current.objective,
-          tokensUsed: current.tokensUsed,
-          tokenBudget: current.tokenBudget,
-          autoTurns: current.autoTurns,
-          timeUsedSeconds: current.timeUsedSeconds,
-          stopReason: current.stopReason,
-          lastCheckpoint: current.lastCheckpoint,
-          completionEvidence: current.completionEvidence,
-          blocker: current.blocker,
-          planRevision: current.planRevision,
-        };
-        if (current && run.budget)
-          result.estimatedInferenceDollars =
-            (current.tokensUsed * run.budget.dollars) / run.budget.tokens;
+        result.goal = await goal(box, run);
         const active = await api<{ data: Record<string, unknown> }>(box, "/api/session/active");
         result.execution = active.data[run.sessionId] ?? "idle";
         result.permissions = (
@@ -186,6 +167,7 @@ export async function status(options: Options) {
         result.forms = (
           await api<{ data: unknown[] }>(box, `/api/session/${run.sessionId}/form`)
         ).data;
+        result.activity = await latestActivity(box, run.sessionId);
       }
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);
@@ -200,11 +182,14 @@ export async function status(options: Options) {
   ];
   if (result.goal) {
     const current = result.goal;
-    const limit = current.tokenBudget === null ? " (no budget)" : ` / ${current.tokenBudget}`;
-    lines.push(`Tokens: ${current.tokensUsed}${limit}`);
+    lines.push(`Rounds: ${current.rounds} / ${current.maxRounds}`);
     lines.push(`Execution: ${result.execution === "idle" ? "idle" : "running"}`);
-    if (current.stopReason) lines.push(`Stop reason: ${current.stopReason}`);
-    if (current.lastCheckpoint?.summary) lines.push(current.lastCheckpoint.summary);
+    // This note may be a reviewer verdict, a pause request, or a server error.
+    if (current.reason) lines.push(`Goal update: ${current.reason}`);
+  }
+  if (result.activity) {
+    lines.push(`Activity: ${result.activity.summary}`);
+    lines.push(`Recorded: ${new Date(result.activity.recordedAt).toISOString()}`);
   }
   if (result.permissions?.length) lines.push(`Pending permissions: ${result.permissions.length}`);
   if (result.forms?.length) lines.push(`Pending questions: ${result.forms.length}`);
@@ -251,24 +236,13 @@ export async function control(
     }
     case "pause":
     case "resume": {
-      // Commands are asynchronous: distinguish acceptance from a confirmed state change.
-      const current = await goal(box, id);
+      // Native commands persist their state before returning. Read it back because
+      // work may already have completed or paused again by the time we observe it.
+      const current = await goal(box, run);
       if (!current) throw new Error("No goal has been created yet.");
-      if (
-        action === "resume" &&
-        (current.status === "budgetLimited" ||
-          (current.tokenBudget !== null && current.tokensUsed >= current.tokenBudget))
-      ) {
-        throw new Error(
-          "The goal's token budget is exhausted. Longshot does not increase or reset budgets.",
-        );
-      }
-      if (["complete", "unmet", "cancelled"].includes(current.status))
+      if (current.status === "complete")
         throw new Error(`Goal is ${current.status}; it cannot be ${action}d by Longshot.`);
-      if (
-        action === "pause" &&
-        ["paused", "budgetLimited", "usageLimited"].includes(current.status)
-      ) {
+      if (action === "pause" && current.status === "paused") {
         return report(
           { goal: current },
           options.json,
@@ -277,24 +251,16 @@ export async function control(
       }
       if (action === "resume" && current.status === "active")
         return report({ goal: current }, options.json, "Goal is already active.");
-      await api(box, `/api/session/${id}/command`, {
-        name: action === "pause" ? "pause_goal" : "resume_goal",
-        text: "",
-      });
-      await until(async () => {
-        const next = await goal(box, id);
-        if (!next) return false;
-        if (action === "pause") {
-          return ["paused", "budgetLimited", "usageLimited", "complete"].includes(next.status);
-        }
-        return next.status === "active" || next.status === "complete";
-      }, `${action} was submitted but the expected goal state was not confirmed. Inspect status/logs.`);
+      await api(box, `/api/session/${id}/command`, { name: "goal", text: action });
+      const next = await goal(box, run);
+      if (!next) throw new Error("The goal was cleared. Inspect status before retrying.");
       return report(
-        { goal: await goal(box, id) },
+        { goal: next },
         options.json,
-        action === "pause"
-          ? "Goal continuation paused. In-flight work may finish; the Sailbox remains running."
-          : "Goal resumed.",
+        `Goal: ${next.status}.${next.reason ? ` ${next.reason}` : ""}` +
+          (next.status === "paused"
+            ? " In-flight work may finish; the Sailbox remains running."
+            : ""),
       );
     }
   }
@@ -305,7 +271,7 @@ export async function exportRun(options: Options) {
   if (run.destroyedAt) throw new Error("Cannot export a destroyed Sailbox.");
   const box = await getBox(run);
   if (run.sessionId) {
-    const current = await goal(box, run.sessionId);
+    const current = await goal(box, run);
     const active = await api<{ data: Record<string, unknown> }>(box, "/api/session/active");
     if (current?.status === "active" || run.sessionId in active.data)
       throw new Error("Pause the goal and wait for execution to become idle before exporting.");
