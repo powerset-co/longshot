@@ -29,13 +29,7 @@ export function configuration(
         package: "@opencode/ai/providers/openai-compatible",
         settings: { baseURL: "https://api.sailresearch.com/v1", headerTimeout: 900_000 },
         body: { metadata: { completion_window: run.config.window } },
-        models: {
-          coder: {
-            modelID: run.config.model,
-            name: run.config.model,
-            limit: { context: 131_072, output: 16_384 },
-          },
-        },
+        models: { coder: { modelID: run.config.model, name: run.config.model } },
       },
     },
     plugins: [
