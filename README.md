@@ -1,6 +1,6 @@
 # Longshot
 
-A tiny CLI for managing long-running, goal-based, coding tasks on [Sailboxes](https://docs.sailresearch.com/sailbox-sdk), using Sail inference and OpenCode in goal mode.
+A tiny CLI for managing long-running, goal-based, coding tasks on [Sailboxes](https://docs.sailresearch.com/sailbox-sdk), using [Sail inference](https://sailresearch.com) and [OpenCode](https://opencode.ai) in [goal mode](https://x.com/Neriousy/status/2115790892678434965).
 
 **One directory, one run.** Longshot keeps resource IDs in `.longshot/run.json`. The agent runs remotely; your terminal can disconnect and re-attach later. There is no local daemon or global Longshot directory.
 
@@ -14,7 +14,7 @@ curl -fsSL https://github.com/powerset-co/longshot/releases/latest/download/inst
 
 The installer downloads the matching release, verifies its SHA-256 checksum, and installs `longshot` in `~/.local/bin`. It prints PATH instructions if needed and does not edit your shell configuration. Run the same command again to upgrade.
 
-The binary includes its runtime. You do not need Bun, Node, OpenCode, the Sail CLI, Docker, or Git installed locally. You only need a **Sail API key** to start a run.
+The binary includes its runtime. You do not need Bun, Node, OpenCode, the Sail CLI, Docker, or Git installed locally. You only need a **[Sail API key](https://app.sailresearch.com)** to start a run.
 
 To install a particular version or choose a different directory:
 
@@ -126,9 +126,9 @@ Sail credential injection applies to HTTPS headers/query parameters; it does **n
 
 ## Monitoring costs
 
-Monitor inference and compute charges through Sail. Use `longshot pause` to pause goal continuation; an in-flight call may finish. Sailbox compute continues after a goal pauses or completes. Export your results, then use `longshot destroy --yes` to remove the remote resources.
+Monitor inference and compute charges through [Sail](https://app.sailresearch.com). Use `longshot pause` to pause goal continuation; an in-flight call may finish. Sailbox compute continues after a goal pauses or completes. Export your results, then use `longshot destroy --yes` to remove the remote resources.
 
-OpenCode's native goal mode reviews progress whenever the session would finish. It continues until the reviewer confirms completion, or pauses because it needs help, encounters an error, stops making progress, or reaches 50 continuation rounds. `longshot resume` starts a fresh round allowance. A server restart also pauses an active goal. `status` reports the current state, round count, and latest goal update (reviewer feedback or a pause/error reason). It also reads up to three recent assistant messages to show a short text, reasoning, or tool activity excerpt. `Recorded` is OpenCode's timestamp for that activity, not the time you polled; an in-flight response may still show its start time. `--json` includes this as `activity` with `type`, `summary`, and `recordedAt` (Unix milliseconds), or `null` before output is available. These reads make no inference requests. `logs` includes goal-state changes. The reviewer makes additional inference requests using the same Sail model.
+OpenCode's native [goal mode](https://x.com/Neriousy/status/2115790892678434965) reviews progress whenever the session would finish. It continues until the reviewer confirms completion, or pauses because it needs help, encounters an error, stops making progress, or reaches 50 continuation rounds. `longshot resume` starts a fresh round allowance. A server restart also pauses an active goal. `status` reports the current state, round count, and latest goal update (reviewer feedback or a pause/error reason). It also reads up to three recent assistant messages to show a short text, reasoning, or tool activity excerpt. `Recorded` is OpenCode's timestamp for that activity, not the time you polled; an in-flight response may still show its start time. `--json` includes this as `activity` with `type`, `summary`, and `recordedAt` (Unix milliseconds), or `null` before output is available. These reads make no inference requests. `logs` includes goal-state changes. The reviewer makes additional inference requests using the same Sail model.
 
 Longshot does not impose a spending limit, duration limit, or VM expiry. Native goal status does not include token usage or dollar estimates; monitor those through Sail.
 
@@ -182,7 +182,7 @@ Read the modules in this order:
 5. `src/state.ts`: local configuration, run records, and upload staging.
 6. `src/guest-setup.sh`: the guest's OS/runtime setup.
 
-The two runtime dependencies are Sail's SDK and citty. Citty generates help from the command definitions; a small validation step uses Bun's `node:util.parseArgs` to reject unknown flags and extra arguments before dispatch. Run `longshot --help` or `longshot start --help` for usage. OpenCode **2.2.1** and Sail SDK **0.17.1** are pinned. Goal mode is built into OpenCode; no external goal plugin is installed. The standalone binary is built on each target OS/architecture so the SDK's native library is bundled correctly.
+The two runtime dependencies are [Sail's SDK](https://docs.sailresearch.com/sailbox-sdk) and citty. Citty generates help from the command definitions; a small validation step uses Bun's `node:util.parseArgs` to reject unknown flags and extra arguments before dispatch. Run `longshot --help` or `longshot start --help` for usage. [OpenCode **2.2.1**](https://github.com/anomalyco/opencode/releases/tag/v2.2.1) and Sail SDK **0.17.1** are pinned. Goal mode is built into OpenCode; no external goal plugin is installed. The standalone binary is built on each target OS/architecture so the SDK's native library is bundled correctly.
 
 The local tests cover boundaries where a mistake could lose work, expose files, or start an unintended run: exclusive run creation, recovery IDs, upload filtering and links, cleanup ordering, native goal API calls, pause/export guards, event framing, and CLI help/errors. They use temporary directories and mocked Sail operations; they do not create cloud resources. CLI tests also check that misspelled flags fail before provisioning and that JSON output remains usable by agents. Installer tests run the actual setup shell in a temporary filesystem, including replacement of a preinstalled executable and both OpenCode version-output formats.
 
