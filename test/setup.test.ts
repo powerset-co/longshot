@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import setup from "../src/guest-setup.sh" with { type: "text" };
+import { versions } from "../src/state.ts";
 
 async function install(version: string) {
   const root = await mkdtemp(join(tmpdir(), "longshot-setup-"));
@@ -31,7 +32,7 @@ async function install(version: string) {
         .replaceAll("/opt/longshot", `${root}/opt/longshot`)
         .replaceAll("/tmp/opencode.tgz", `${root}/tmp/opencode.tgz`),
     ].join("\n");
-    const child = Bun.spawn(["bash", "-c", script], {
+    const child = Bun.spawn(["bash", "-c", script, "setup.sh", versions.opencode], {
       env: {
         ...process.env,
         PATH: `${root}/usr/local/bin:${process.env.PATH}`,
@@ -49,7 +50,7 @@ async function install(version: string) {
 }
 
 test("setup replaces preinstalled OpenCode and accepts both version formats", async () => {
-  for (const version of ["opencode v2.2.1", "2.2.1"]) {
+  for (const version of [`opencode v${versions.opencode}`, versions.opencode]) {
     const result = await install(version);
     expect(result).toEqual({ code: 0, stderr: "" });
   }
@@ -58,5 +59,5 @@ test("setup replaces preinstalled OpenCode and accepts both version formats", as
 test("setup reports the actual version when the pin does not match", async () => {
   const result = await install("opencode v1.0.0");
   expect(result.code).toBe(1);
-  expect(result.stderr).toContain("Expected OpenCode 2.2.1, got: opencode v1.0.0");
+  expect(result.stderr).toContain(`Expected OpenCode ${versions.opencode}, got: opencode v1.0.0`);
 });

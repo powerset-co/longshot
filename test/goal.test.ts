@@ -12,7 +12,9 @@ import { createRun, newRun, readConfig } from "../src/state.ts";
 const directories: string[] = [];
 const mocks: { mockRestore(): void }[] = [];
 const originalKey = process.env.SAIL_API_KEY;
+const originalExitCode = process.exitCode;
 afterEach(async () => {
+  process.exitCode = originalExitCode ?? 0;
   for (const mock of mocks.splice(0)) mock.mockRestore();
   if (originalKey === undefined) delete process.env.SAIL_API_KEY;
   else process.env.SAIL_API_KEY = originalKey;
@@ -122,6 +124,21 @@ test("status exposes the review reason and rounds without a model request", asyn
   expect(human).toContain("Goal update: Paused by the user");
   expect(human).toContain("Activity: Tests are passing.");
   expect(human).toContain("Recorded: 1970-01-01T00:00:02.000Z");
+});
+
+test("status does not report running when the execution query fails", async () => {
+  const { options } = await fixture();
+  const box = boxFor((url) => {
+    if (url.pathname === "/api/rpc/opencode.goal/get") return { output: progress };
+    throw new Error("Execution query failed");
+  });
+  mocks.push(spyOn(Sailbox, "get").mockResolvedValue(box));
+  const output = spyOn(console, "log").mockImplementation(() => {});
+  mocks.push(output);
+  await status({ ...options, json: false });
+  expect(process.exitCode).toBe(1);
+  expect(output.mock.calls[0]![0]).toContain("Execution: unavailable");
+  expect(output.mock.calls[0]![0]).toContain("Error: Execution query failed");
 });
 
 test("activity reads a bounded page and prefers a running parallel tool", async () => {

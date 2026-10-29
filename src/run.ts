@@ -79,7 +79,7 @@ export async function start(options: Options, objective: string) {
     await saveRun(directory, run, "setting-up");
     console.error(`Sailbox ${run.boxId}: installing OpenCode ${versions.opencode}...`);
     await box.fs.write("/tmp/longshot-setup.sh", setupScript, { mode: 0o700 });
-    await command(box, ["bash", "/tmp/longshot-setup.sh"], "0:0", 1200);
+    await command(box, ["bash", "/tmp/longshot-setup.sh", run.versions.opencode], "0:0", 1200);
     await box.fs.uploadDir({ localDir: upload, guestDir: project, user });
     await rm(upload, { recursive: true, force: true });
     await box.fs.write(`${session}/goal.md`, objective, { user });
@@ -183,7 +183,9 @@ export async function status(options: Options) {
   if (result.goal) {
     const current = result.goal;
     lines.push(`Rounds: ${current.rounds} / ${current.maxRounds}`);
-    lines.push(`Execution: ${result.execution === "idle" ? "idle" : "running"}`);
+    const execution =
+      result.execution === "idle" ? "idle" : result.execution ? "running" : "unavailable";
+    lines.push(`Execution: ${execution}`);
     // This note may be a reviewer verdict, a pause request, or a server error.
     if (current.reason) lines.push(`Goal update: ${current.reason}`);
   }

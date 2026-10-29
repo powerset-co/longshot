@@ -88,18 +88,18 @@ export async function prepare(box: Sailbox, run: Run) {
   }
   // Built-in plugins activate asynchronously, so a listening server alone is
   // not sufficient: wait until the native goal command has registered.
-  await until(
-    async () => {
-      try {
-        await api(box, "/api/info");
-        const commands = await api<{ data: { name: string }[] }>(box, "/api/command" + location);
-        return commands.data.some((x) => x.name === "goal");
-      } catch {
-        return false;
-      }
-    },
+  const deadline = Date.now() + 120_000;
+  do {
+    try {
+      const commands = await api<{ data: { name: string }[] }>(box, "/api/command" + location);
+      if (commands.data.some((x) => x.name === "goal")) return;
+    } catch {
+      // Connection failures are expected while the server is starting.
+    }
+    await Bun.sleep(1000);
+  } while (Date.now() < deadline);
+  throw new Error(
     "OpenCode goal mode did not become ready. Inspect the exported session/server.log.",
-    120_000,
   );
 }
 
@@ -193,7 +193,7 @@ export async function latestActivity(box: Sailbox, id: string): Promise<Activity
     const running = parts.find(
       (part) => part.type === "tool" && ["running", "streaming"].includes(part.state.status),
     );
-    for (const part of running ? [running, ...parts] : parts) {
+    for (const part of running ? [running] : parts) {
       let summary: string;
       let recordedAt = message.time.streamed ?? message.time.completed ?? message.time.created;
       if (part.type === "tool") {
@@ -218,19 +218,6 @@ export async function latestActivity(box: Sailbox, id: string): Promise<Activity
     }
   }
   return null;
-}
-
-export async function until(
-  check: () => Promise<boolean>,
-  failure: string,
-  milliseconds = 300_000,
-) {
-  const deadline = Date.now() + milliseconds;
-  do {
-    if (await check()) return;
-    await Bun.sleep(1000);
-  } while (Date.now() < deadline);
-  throw new Error(failure);
 }
 
 // SSE boundaries can split anywhere in an exec chunk, including between CR/LF.
