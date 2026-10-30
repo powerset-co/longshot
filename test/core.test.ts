@@ -7,12 +7,12 @@ import {
   includeUpload,
   newRun,
   readConfig,
+  readInput,
   readRun,
   saveRun,
   stageUpload,
 } from "../src/state.ts";
-import { estimateBudget } from "../src/pricing.ts";
-import { configuration, events } from "../src/opencode.ts";
+import { configuration, events, goalObjective } from "../src/opencode.ts";
 import { inferencePolicy } from "../src/sail.ts";
 
 const directories: string[] = [];
@@ -49,7 +49,7 @@ describe("run state", () => {
     await writeFile(join(dir, "longshot.json"), '{"budegt":50}');
     await expect(readConfig(dir)).rejects.toThrow("Unknown configuration");
     await writeFile(join(dir, "longshot.json"), '{"pricing":null}');
-    await expect(readConfig(dir)).rejects.toThrow("pricing requires positive");
+    await expect(readConfig(dir)).rejects.toThrow("Unknown configuration key: pricing");
   });
 });
 
@@ -87,24 +87,26 @@ test("upload stages uncommitted files and templates without recursing into state
   expect(includeUpload("packages/a/node_modules/x")).toBe(false);
 });
 
-test("budget is opt-in, bounded, and independent of cache discounts", () => {
-  expect(estimateBudget(undefined, "unknown", "balanced")).toBeUndefined();
-  expect(estimateBudget(50, "zai-org/GLM-5.3", "balanced")!.tokens).toBe(71_428_571);
-  for (const dollars of [0, -1, NaN, Infinity, 1e30])
-    expect(() => estimateBudget(dollars, "zai-org/GLM-5.3", "balanced")).toThrow();
-  expect(() => estimateBudget(5, "unknown", "balanced")).toThrow("No bundled price");
-  expect(estimateBudget(5, "unknown", "balanced", { input: 1, output: 1 })!.tokens).toBe(5_000_000);
-});
-
-test("generated config leaves budgets opt-in and restricts budgeted sessions", async () => {
+test("generated config uses native goal mode without overriding model limits", async () => {
   const run = newRun(await readConfig(await fixture()));
   const config = configuration(run);
-  expect(config.plugins[0].options).not.toHaveProperty("default_token_budget");
+  expect(config).not.toHaveProperty("plugins");
+  expect(config.providers.sail.models.coder).not.toHaveProperty("limit");
   expect(config.providers.sail.body.metadata.completion_window).toBe("balanced");
-  run.budget = estimateBudget(2, run.config.model, run.config.window);
-  const bounded = configuration(run);
-  expect(bounded.permissions).toContainEqual({ action: "subagent", resource: "*", effect: "deny" });
-  expect(bounded.plugins[0].options.default_token_budget).toBe(run.budget!.tokens);
+  expect(config.permissions).not.toContainEqual({
+    action: "subagent",
+    resource: "*",
+    effect: "deny",
+  });
+});
+
+test("long specifications are read intact while the native objective stays short", async () => {
+  const dir = await fixture();
+  const specification = "Requirement with Unicode: 🦀\n".repeat(5000);
+  await writeFile(join(dir, "GOAL.md"), specification);
+  expect(await readInput(dir, undefined, "GOAL.md")).toBe(specification);
+  expect(goalObjective.length).toBeLessThanOrEqual(4000);
+  expect(goalObjective).toContain("/home/longshot/session/goal.md");
 });
 
 test("injection matches only the intended Sail method and path", () => {

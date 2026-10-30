@@ -9,7 +9,10 @@ import {
   Sailbox,
   Secret,
   type EgressPolicyDocument,
+  type ExecOptions,
 } from "@sailresearch/sdk";
+import { once } from "node:events";
+import exportScript from "./guest-export.py" with { type: "text" };
 import type { Run } from "./state.ts";
 
 export const home = "/home/longshot";
@@ -86,6 +89,47 @@ export async function command(box: Sailbox, args: string[], asUser = user, timeo
   if (result.stdoutTruncated) throw new Error("Guest response exceeded the output limit.");
   return result.stdout;
 }
+
+// Download a portable copy without changing links in the running Sailbox.
+export async function downloadDirectory(box: Sailbox, guestDir: string, localDir: string) {
+  const staging = (
+    await command(box, ["python3", "-c", exportScript, guestDir], user, 1200)
+  ).trim();
+  try {
+    await box.fs.downloadDir({ guestDir: `${staging}/tree`, localDir });
+  } finally {
+    await box.fs.remove(staging, { user });
+  }
+}
+
+// Setup output is progress, so both remote streams go to local stderr. Consume
+// them together while waiting: an unread pipe can otherwise block the command.
+export async function streamCommand(
+  box: Sailbox,
+  args: string[],
+  options: ExecOptions,
+  output?: (chunk: string, source: "stdout" | "stderr") => void | Promise<void>,
+) {
+  const proc = await box.exec(args, { ...options, outputMode: "pipe" });
+  const forward = async (stream: AsyncIterable<string>, source: "stdout" | "stderr") => {
+    for await (const chunk of stream) {
+      if (output) await output(chunk, source);
+      else if (!process.stderr.write(chunk)) await once(process.stderr, "drain");
+    }
+  };
+  try {
+    const [result] = await Promise.all([
+      proc.wait(),
+      forward(proc.stdout, "stdout"),
+      forward(proc.stderr, "stderr"),
+    ]);
+    if (result.exitCode !== 0)
+      throw new Error(`Setup command failed (${result.exitCode}). See the output above.`);
+  } finally {
+    proc.close();
+  }
+}
+
 async function ignoreMissing(operation: () => Promise<unknown>) {
   try {
     await operation();

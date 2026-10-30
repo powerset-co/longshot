@@ -4,26 +4,36 @@ import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { EgressPolicy, Sailbox, Secret, type EgressPolicyDocument } from "@sailresearch/sdk";
 import setupScript from "./guest-setup.sh" with { type: "text" };
+import { startupProgress } from "./progress.ts";
 import { createRun, newRun, readConfig, readRun, saveRun, stageUpload, versions } from "./state.ts";
 import {
   cleanup,
   client,
   command,
+  downloadDirectory,
   getBox,
   inferencePolicy,
   project,
   provisionBox,
   quote,
   session,
+  streamCommand,
   user,
 } from "./sail.ts";
-import { api, goal, logs, prepare, until, type Goal } from "./opencode.ts";
-import type { Budget } from "./pricing.ts";
+import {
+  api,
+  goal,
+  goalObjective,
+  latestActivity,
+  logs,
+  prepare,
+  type Activity,
+  type Goal,
+} from "./opencode.ts";
 
 export interface Options {
   directory: string;
   json: boolean;
-  budget?: number;
   model?: string;
   window?: string;
   size?: string;
@@ -46,7 +56,7 @@ export async function start(options: Options, objective: string) {
     size: options.size,
     setup: options.setup,
   });
-  const run = newRun(config, options.budget);
+  const run = newRun(config);
   const apiClient = client();
   const customSetup = config.setup
     ? await readFile(resolve(directory, config.setup), "utf8")
@@ -57,39 +67,45 @@ export async function start(options: Options, objective: string) {
   const policy = inferencePolicy(run.secretName, extraPolicy);
   // Finish local validation before reserving this directory or creating cloud resources.
   await createRun(directory, run);
+  const progress = startupProgress(options.json);
   try {
-    console.error("Preparing project files...");
+    progress.stage("Preparing project files");
     const upload = await stageUpload(directory, config.exclude);
+    progress.stage("Configuring Sail credentials");
     // Unique names prevent accidental replacement of another run's secret.
     await saveRun(directory, run, "creating-secret");
     await Secret.set(run.secretName, process.env.SAIL_API_KEY!, { client: apiClient });
     await saveRun(directory, run, "creating-policy");
     run.policyId = (await EgressPolicy.create(run.name, policy, { client: apiClient })).id;
     await saveRun(directory, run, "creating-box");
-    console.error("Creating Sailbox (compute charges start now)...");
+    progress.stage("Creating Sailbox (compute charges start now)");
     const box = await provisionBox(run, apiClient);
     run.boxId = box.sailboxId;
     await saveRun(directory, run, "setting-up");
-    console.error(`Sailbox ${run.boxId}: installing OpenCode ${versions.opencode}...`);
+    progress.stage(`Installing OpenCode ${versions.opencode}`);
     await box.fs.write("/tmp/longshot-setup.sh", setupScript, { mode: 0o700 });
-    await command(box, ["bash", "/tmp/longshot-setup.sh"], "0:0", 1200);
+    await streamCommand(
+      box,
+      ["bash", "/tmp/longshot-setup.sh", run.versions.opencode],
+      { user: "0:0", cwd: "/", timeoutSeconds: 1200 },
+      progress.write,
+    );
+    progress.stage("Uploading project files");
     await box.fs.uploadDir({ localDir: upload, guestDir: project, user });
     await rm(upload, { recursive: true, force: true });
     await box.fs.write(`${session}/goal.md`, objective, { user });
     if (customSetup !== null) {
+      progress.stage("Running project setup");
       await box.fs.write(`${session}/setup.sh`, customSetup, { user, mode: 0o700 });
-      const result = await box.run(["bash", "-e", `${session}/setup.sh`], {
-        cwd: project,
-        user,
-        env: config.env,
-        timeoutSeconds: 1200,
-      });
-      console.error(result.stdout);
-      console.error(result.stderr);
-      if (result.exitCode !== 0)
-        throw new Error(`Project setup failed (${result.exitCode}). Sailbox preserved.`);
+      await streamCommand(
+        box,
+        ["bash", "-e", `${session}/setup.sh`],
+        { cwd: project, user, env: config.env, timeoutSeconds: 1200 },
+        progress.write,
+      );
     }
     await saveRun(directory, run, "starting-server");
+    progress.stage("Starting OpenCode server");
     await prepare(box, run);
     const created = await api<{ data: { id: string } }>(box, "/api/session", {
       location: { directory: project },
@@ -99,25 +115,20 @@ export async function start(options: Options, objective: string) {
     });
     run.sessionId = created.data.id;
     await saveRun(directory, run, "starting-goal");
-    await api(box, `/api/session/${run.sessionId}/command`, { name: "goal", text: objective });
-    await until(
-      async () => !!(await goal(box, run.sessionId!)),
-      "Goal submission was accepted but creation was not confirmed. Inspect status/logs before sending another message.",
-    );
-    const current = (await goal(box, run.sessionId))!;
-    if (current.tokenBudget !== (run.budget?.tokens ?? null)) {
-      await api(box, `/api/session/${run.sessionId}/command`, { name: "pause_goal", text: "" });
-      throw new Error(
-        "The model created a goal with an unexpected token budget. Paused continuation; inspect the session.",
-      );
-    }
+    progress.stage("Starting goal");
+    await api(box, `/api/session/${run.sessionId}/command`, { name: "goal", text: goalObjective });
+    const current = await goal(box, run);
+    if (!current)
+      throw new Error("Goal creation was not confirmed. Inspect status/logs before retrying.");
     await saveRun(directory, run, "started");
+    progress.finish();
     report(
-      { boxId: run.boxId, sessionId: run.sessionId, goal: current, budget: run.budget ?? null },
+      { boxId: run.boxId, sessionId: run.sessionId, goal: current },
       options.json,
-      `Started ${run.boxId}\nSession: ${run.sessionId}\nBudget: ${run.budget ? `approximately $${run.budget.dollars} (${run.budget.tokens.toLocaleString()} tokens)` : "none"}\nUse longshot status, logs, or attach.`,
+      `Started ${run.boxId}\nSession: ${run.sessionId}\nUse longshot status, logs, or attach.`,
     );
   } catch (error) {
+    progress.finish(false);
     console.error(
       `Startup stopped at ${run.stage}. Resources are preserved; use status or destroy in this directory.`,
     );
@@ -125,18 +136,18 @@ export async function start(options: Options, objective: string) {
   }
 }
 
-// Only fields used by status are projected from the plugin's larger history.
+// Status combines native goal progress with the server's execution activity.
 interface RunStatus {
   name: string;
   stage: string;
   boxId: string | null;
   sessionId: string | null;
-  budget: Budget | null;
   versions: typeof versions;
   sandbox: string;
   goal: Goal | null;
+  activity: Activity | null;
+  elapsedMs: number | null;
   execution: unknown;
-  estimatedInferenceDollars?: number;
   permissions?: unknown[];
   forms?: unknown[];
   error?: string;
@@ -149,10 +160,11 @@ export async function status(options: Options) {
     stage: run.stage,
     boxId: run.boxId ?? null,
     sessionId: run.sessionId ?? null,
-    budget: run.budget ?? null,
     versions: run.versions,
     sandbox: run.destroyedAt ? "terminated" : "not-confirmed",
     goal: null,
+    activity: null,
+    elapsedMs: null,
     execution: null,
   };
   if (run.boxId && !run.destroyedAt) {
@@ -160,24 +172,7 @@ export async function status(options: Options) {
       const box = await Sailbox.get(run.boxId, { client: client() });
       result.sandbox = box.status;
       if (box.status === "running" && run.sessionId) {
-        const current = await goal(box, run.sessionId);
-        // Status is a compact observation, not a dump of the entire goal history.
-        result.goal = current && {
-          status: current.status,
-          objective: current.objective,
-          tokensUsed: current.tokensUsed,
-          tokenBudget: current.tokenBudget,
-          autoTurns: current.autoTurns,
-          timeUsedSeconds: current.timeUsedSeconds,
-          stopReason: current.stopReason,
-          lastCheckpoint: current.lastCheckpoint,
-          completionEvidence: current.completionEvidence,
-          blocker: current.blocker,
-          planRevision: current.planRevision,
-        };
-        if (current && run.budget)
-          result.estimatedInferenceDollars =
-            (current.tokensUsed * run.budget.dollars) / run.budget.tokens;
+        result.goal = await goal(box, run);
         const active = await api<{ data: Record<string, unknown> }>(box, "/api/session/active");
         result.execution = active.data[run.sessionId] ?? "idle";
         result.permissions = (
@@ -186,6 +181,15 @@ export async function status(options: Options) {
         result.forms = (
           await api<{ data: unknown[] }>(box, `/api/session/${run.sessionId}/form`)
         ).data;
+        result.activity = await latestActivity(box, run.sessionId);
+        const info = await api<{ data: { time: { created: number } } }>(
+          box,
+          `/api/session/${run.sessionId}`,
+        );
+        // Session creation excludes sandbox setup. Only completion stops this
+        // wall-clock duration; pauses and waiting time still count.
+        const end = result.goal?.status === "complete" ? result.goal.updatedAt : Date.now();
+        result.elapsedMs = Math.max(0, end - info.data.time.created);
       }
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);
@@ -198,18 +202,34 @@ export async function status(options: Options) {
     `Session: ${run.sessionId ?? "not created"}`,
     `Goal: ${result.goal?.status ?? "unavailable"}`,
   ];
+  if (result.elapsedMs !== null) lines.push(`Elapsed: ${duration(result.elapsedMs)}`);
   if (result.goal) {
     const current = result.goal;
-    const limit = current.tokenBudget === null ? " (no budget)" : ` / ${current.tokenBudget}`;
-    lines.push(`Tokens: ${current.tokensUsed}${limit}`);
-    lines.push(`Execution: ${result.execution === "idle" ? "idle" : "running"}`);
-    if (current.stopReason) lines.push(`Stop reason: ${current.stopReason}`);
-    if (current.lastCheckpoint?.summary) lines.push(current.lastCheckpoint.summary);
+    lines.push(`Rounds: ${current.rounds} / ${current.maxRounds}`);
+    const execution =
+      result.execution === "idle" ? "idle" : result.execution ? "running" : "unavailable";
+    lines.push(`Execution: ${execution}`);
+    // This note may be a reviewer verdict, a pause request, or a server error.
+    if (current.reason) lines.push(`Goal update: ${current.reason}`);
+  }
+  if (result.activity) {
+    lines.push(`Activity: ${result.activity.summary}`);
+    lines.push(`Recorded: ${new Date(result.activity.recordedAt).toISOString()}`);
   }
   if (result.permissions?.length) lines.push(`Pending permissions: ${result.permissions.length}`);
   if (result.forms?.length) lines.push(`Pending questions: ${result.forms.length}`);
   if (result.error) lines.push(`Error: ${result.error}`);
   report(result, options.json, lines.join("\n"));
+}
+
+function duration(milliseconds: number) {
+  const seconds = Math.floor(milliseconds / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor(seconds / 3600) % 24;
+  const minutes = Math.floor(seconds / 60) % 60;
+  return [days && `${days}d`, hours && `${hours}h`, minutes && `${minutes}m`, `${seconds % 60}s`]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export async function control(
@@ -251,24 +271,13 @@ export async function control(
     }
     case "pause":
     case "resume": {
-      // Commands are asynchronous: distinguish acceptance from a confirmed state change.
-      const current = await goal(box, id);
+      // Native commands persist their state before returning. Read it back because
+      // work may already have completed or paused again by the time we observe it.
+      const current = await goal(box, run);
       if (!current) throw new Error("No goal has been created yet.");
-      if (
-        action === "resume" &&
-        (current.status === "budgetLimited" ||
-          (current.tokenBudget !== null && current.tokensUsed >= current.tokenBudget))
-      ) {
-        throw new Error(
-          "The goal's token budget is exhausted. Longshot does not increase or reset budgets.",
-        );
-      }
-      if (["complete", "unmet", "cancelled"].includes(current.status))
+      if (current.status === "complete")
         throw new Error(`Goal is ${current.status}; it cannot be ${action}d by Longshot.`);
-      if (
-        action === "pause" &&
-        ["paused", "budgetLimited", "usageLimited"].includes(current.status)
-      ) {
+      if (action === "pause" && current.status === "paused") {
         return report(
           { goal: current },
           options.json,
@@ -277,24 +286,16 @@ export async function control(
       }
       if (action === "resume" && current.status === "active")
         return report({ goal: current }, options.json, "Goal is already active.");
-      await api(box, `/api/session/${id}/command`, {
-        name: action === "pause" ? "pause_goal" : "resume_goal",
-        text: "",
-      });
-      await until(async () => {
-        const next = await goal(box, id);
-        if (!next) return false;
-        if (action === "pause") {
-          return ["paused", "budgetLimited", "usageLimited", "complete"].includes(next.status);
-        }
-        return next.status === "active" || next.status === "complete";
-      }, `${action} was submitted but the expected goal state was not confirmed. Inspect status/logs.`);
+      await api(box, `/api/session/${id}/command`, { name: "goal", text: action });
+      const next = await goal(box, run);
+      if (!next) throw new Error("The goal was cleared. Inspect status before retrying.");
       return report(
-        { goal: await goal(box, id) },
+        { goal: next },
         options.json,
-        action === "pause"
-          ? "Goal continuation paused. In-flight work may finish; the Sailbox remains running."
-          : "Goal resumed.",
+        `Goal: ${next.status}.${next.reason ? ` ${next.reason}` : ""}` +
+          (next.status === "paused"
+            ? " In-flight work may finish; the Sailbox remains running."
+            : ""),
       );
     }
   }
@@ -305,7 +306,7 @@ export async function exportRun(options: Options) {
   if (run.destroyedAt) throw new Error("Cannot export a destroyed Sailbox.");
   const box = await getBox(run);
   if (run.sessionId) {
-    const current = await goal(box, run.sessionId);
+    const current = await goal(box, run);
     const active = await api<{ data: Record<string, unknown> }>(box, "/api/session/active");
     if (current?.status === "active" || run.sessionId in active.data)
       throw new Error("Pause the goal and wait for execution to become idle before exporting.");
@@ -320,7 +321,7 @@ export async function exportRun(options: Options) {
   const marker = join(destination, ".partial");
   await Bun.write(marker, "Export in progress or interrupted. Source Sailbox is unchanged.\n");
   console.error(`Downloading workspace and session to ${destination}...`);
-  await box.fs.downloadDir({ guestDir: project, localDir: join(destination, "workspace") });
+  await downloadDirectory(box, project, join(destination, "workspace"));
   // SQLite's backup API produces a consistent database even while the server is open.
   // Keep the copy separate from live WAL files rather than copying a changing database.
   const hasDatabase = await box.fs.exists(`${session}/opencode.db`);
@@ -338,7 +339,7 @@ source.close()
 `,
     ]);
   if (await box.fs.exists(session))
-    await box.fs.downloadDir({ guestDir: session, localDir: join(destination, "session") });
+    await downloadDirectory(box, session, join(destination, "session"));
   if (hasDatabase) {
     for (const suffix of ["", "-wal", "-shm"])
       await rm(join(destination, "session", `opencode.db${suffix}`), { force: true });

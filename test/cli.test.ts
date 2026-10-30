@@ -41,8 +41,8 @@ test("generated root and command help never start a run", async () => {
   expect(root.stdout).toContain("destroy");
   const start = await invoke(directory, ["start", "--help"]);
   expect(start.code).toBe(0);
-  expect(start.stdout).toContain("--budget");
-  expect(start.stdout).toContain("default: none");
+  expect(start.stdout).toContain("--model");
+  expect(start.stdout).not.toContain("--budget");
   expect(start.stdout).not.toContain("undefined");
   const status = await invoke(directory, ["status", "-h"]);
   expect(status.stdout).not.toContain("--budget");
@@ -52,7 +52,8 @@ test("generated root and command help never start a run", async () => {
 test("invalid input fails before provisioning with one JSON error on stderr", async () => {
   const directory = await fixture();
   for (const args of [
-    ["start", "goal", "--budegt", "10"],
+    ["start", "goal", "--modle", "unknown-model"],
+    ["start", "goal", "--budget", "10"],
     ["status", "--budget", "10"],
     ["start", "unquoted", "goal"],
     ["status", "extra"],
@@ -90,17 +91,11 @@ test("global flags work on either side of the command, including a directory nam
   }
 });
 
-test("start forwards model and budget options to validation", async () => {
+test("start accepts a model without a bundled price", async () => {
   const directory = await fixture();
-  const result = await invoke(directory, [
-    "start",
-    "goal",
-    "--model",
-    "unknown-model",
-    "--budget",
-    "5",
-    "--json",
-  ]);
+  const result = await invoke(directory, ["start", "goal", "--model", "unknown-model", "--json"]);
   expect(result.code).toBe(1);
-  expect(JSON.parse(result.stderr).error).toContain("No bundled price");
+  // Missing credentials stop this test locally, after configuration validation.
+  expect(JSON.parse(result.stderr).error).toContain("Set SAIL_API_KEY");
+  expect(await Bun.file(join(directory, ".longshot/run.json")).exists()).toBe(false);
 });
