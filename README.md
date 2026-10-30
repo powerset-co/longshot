@@ -9,7 +9,7 @@
 > [!WARNING]
 > **Experimental, just a vibe-coded side project for now.** Expect rough edges and breaking changes. Keep an eye on your runs and costs.
 
-`longshot` is a tiny CLI for starting and managing long-running, goal-based, agentic coding tasks on [Sailboxes](https://docs.sailresearch.com/sailboxes), using [Sail inference](https://sailresearch.com) and [OpenCode](https://opencode.ai) in (newly available) [goal mode](https://x.com/Neriousy/status/2115790892678434965).
+`longshot` is a tiny CLI for starting and managing long-running, goal-based, agentic coding tasks on [Sailboxes](https://docs.sailresearch.com/sailboxes), using [Sail inference](https://sailresearch.com) and [OpenCode](https://opencode.ai) in [goal mode](https://x.com/Neriousy/status/2115790892678434965).
 
 Running `longshot start` from a directory will start a new Sailbox, a persistent linux VM designed specifically for long-horizon agents (a sandbox that can run indefinitely). OpenCode is automatically started in the Sailbox, configured to use Sail inference (`GLM-5.3` by default) and goal mode.
 
