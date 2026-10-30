@@ -1,5 +1,17 @@
 # Longshot
 
+<p>
+  <a href="https://sailresearch.com"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logos/sail-dark.svg">
+    <img src="docs/logos/sail-light.svg" alt="Sail Research" height="24">
+  </picture></a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="https://opencode.ai"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logos/opencode-dark.svg">
+    <img src="docs/logos/opencode-light.svg" alt="OpenCode" height="24">
+  </picture></a>
+</p>
+
 > [!WARNING]
 > **Experimental, just a vibe-coded side project for now.** Expect rough edges and breaking changes. Keep an eye on your runs and costs.
 
