@@ -1,7 +1,7 @@
 # Longshot
 
 > [!WARNING]
-> **Experimental — just a fun project for now.** Expect rough edges and breaking changes. Keep an eye on your runs and costs.
+> **Experimental, just a vibe-coded side project for now.** Expect rough edges and breaking changes. Keep an eye on your runs and costs.
 
 A tiny CLI for starting and managing long-running coding tasks on [Sailboxes](https://docs.sailresearch.com/sailboxes), using [Sail inference](https://sailresearch.com) and [OpenCode](https://opencode.ai) in [goal mode](https://x.com/Neriousy/status/2115790892678434965).
 
