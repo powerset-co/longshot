@@ -4,6 +4,10 @@ A tiny CLI for managing long-running, goal-based, coding tasks on [Sailboxes](ht
 
 **One directory, one run.** Longshot keeps resource IDs in `.longshot/run.json`. The agent runs remotely; your terminal can disconnect and re-attach later. There is no local daemon or global Longshot directory.
 
+![Longshot demo: starting a Bun word-counter task, checking status, and exporting the project](docs/demo.gif)
+
+_A real terminal recording; waiting time is shortened._
+
 ## Install
 
 macOS and Linux, on ARM64 or x64:
