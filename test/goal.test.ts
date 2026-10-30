@@ -1,7 +1,7 @@
 // Exercise Longshot's HTTP boundary and lifecycle guards without cloud resources.
 // The fake Sail exec forwards curl's URL and stdin to a small API fixture.
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { Sailbox } from "@sailresearch/sdk";
+import { Client, Sailbox } from "@sailresearch/sdk";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,6 +72,9 @@ async function fixture() {
   const run = { ...newRun(await readConfig(directory)), boxId: "box-1", sessionId: "session-1" };
   await createRun(directory, run);
   process.env.SAIL_API_KEY = "fixture-not-a-real-key";
+  // Sailbox.get is mocked below, so no native SDK client is needed. Repeated
+  // client initialization can otherwise exhaust the test timeout on macOS CI.
+  mocks.push(spyOn(Client, "fromConfig").mockReturnValue({} as Client));
   return { run, options: { directory, json: true } };
 }
 
