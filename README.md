@@ -97,7 +97,7 @@ CLI flags `--model`, `--window`, `--size`, and `--setup` override configuration.
 
 The agent can install project dependencies itself. For custom preparation, set `"setup": "setup.sh"`; it runs before OpenCode starts. `env` supplies non-secret variables to both. Your local environment is not forwarded.
 
-Visibility defaults to `org`. Use `private` with a user-scoped key to restrict access to the creator. See [Sail access control](https://docs.sailresearch.com/sailboxes-access-control).
+Visibility defaults to `org`. Use `private` with a user-scoped key to restrict access to the creator, subject to an audited admin override. See [Sail access control](https://docs.sailresearch.com/sailboxes-access-control).
 
 ## Secrets
 
