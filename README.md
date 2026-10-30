@@ -3,12 +3,12 @@
 <p>
   <a href="https://sailresearch.com"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/logos/sail-dark.svg">
-    <img src="docs/logos/sail-light.svg" alt="Sail Research" height="24">
+    <img src="docs/logos/sail-light.svg" alt="Sail Research" width="128" height="40">
   </picture></a>
-  &nbsp;&nbsp;&nbsp;
+  &nbsp;
   <a href="https://opencode.ai"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/logos/opencode-dark.svg">
-    <img src="docs/logos/opencode-light.svg" alt="OpenCode" height="24">
+    <img src="docs/logos/opencode-light.svg" alt="OpenCode" width="128" height="40">
   </picture></a>
 </p>
 
