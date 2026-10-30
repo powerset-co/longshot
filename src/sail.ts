@@ -12,6 +12,7 @@ import {
   type ExecOptions,
 } from "@sailresearch/sdk";
 import { once } from "node:events";
+import exportScript from "./guest-export.py" with { type: "text" };
 import type { Run } from "./state.ts";
 
 export const home = "/home/longshot";
@@ -87,6 +88,18 @@ export async function command(box: Sailbox, args: string[], asUser = user, timeo
     throw new Error(`Guest command failed (${result.exitCode}): ${result.stderr || result.stdout}`);
   if (result.stdoutTruncated) throw new Error("Guest response exceeded the output limit.");
   return result.stdout;
+}
+
+// Download a portable copy without changing links in the running Sailbox.
+export async function downloadDirectory(box: Sailbox, guestDir: string, localDir: string) {
+  const staging = (
+    await command(box, ["python3", "-c", exportScript, guestDir], user, 1200)
+  ).trim();
+  try {
+    await box.fs.downloadDir({ guestDir: `${staging}/tree`, localDir });
+  } finally {
+    await box.fs.remove(staging, { user });
+  }
 }
 
 // Setup output is progress, so both remote streams go to local stderr. Consume

@@ -142,7 +142,7 @@ Runs created with the external goal plugin are not migrated. Use their original 
 
 Upload includes uncommitted and untracked files. It does not use `.gitignore`. Longshot excludes `.longshot`, `.git`, `node_modules`, `.DS_Store`, and `.env`/`.env.*` files at any depth, except `.env.example`, `.env.sample`, and `.env.template`. `exclude` adds Bun glob patterns relative to the working directory. Excluding a directory excludes its descendants. Relative symlinks within the upload are copied as links. Recursive links, links outside the project, absolute links, and links into excluded files are rejected before provisioning; copy their inputs into the project or explicitly exclude those links.
 
-Export does not use Git or apply upload exclusions. The output contains:
+Export does not use Git or apply upload exclusions. A temporary guest copy converts absolute symlinks within each exported tree to relative links (including Bun cache links). Links outside that tree remain subject to Sail's archive safety checks. The temporary copy is removed after download; the live files are unchanged. The output contains:
 
 ```text
 export/

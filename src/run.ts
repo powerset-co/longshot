@@ -10,6 +10,7 @@ import {
   cleanup,
   client,
   command,
+  downloadDirectory,
   getBox,
   inferencePolicy,
   project,
@@ -320,7 +321,7 @@ export async function exportRun(options: Options) {
   const marker = join(destination, ".partial");
   await Bun.write(marker, "Export in progress or interrupted. Source Sailbox is unchanged.\n");
   console.error(`Downloading workspace and session to ${destination}...`);
-  await box.fs.downloadDir({ guestDir: project, localDir: join(destination, "workspace") });
+  await downloadDirectory(box, project, join(destination, "workspace"));
   // SQLite's backup API produces a consistent database even while the server is open.
   // Keep the copy separate from live WAL files rather than copying a changing database.
   const hasDatabase = await box.fs.exists(`${session}/opencode.db`);
@@ -338,7 +339,7 @@ source.close()
 `,
     ]);
   if (await box.fs.exists(session))
-    await box.fs.downloadDir({ guestDir: session, localDir: join(destination, "session") });
+    await downloadDirectory(box, session, join(destination, "session"));
   if (hasDatabase) {
     for (const suffix of ["", "-wal", "-shm"])
       await rm(join(destination, "session", `opencode.db${suffix}`), { force: true });
