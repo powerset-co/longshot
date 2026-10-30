@@ -9,11 +9,11 @@
 > [!WARNING]
 > **Experimental, just a vibe-coded side project for now.** Expect rough edges and breaking changes. Keep an eye on your runs and costs.
 
-A tiny CLI for starting and managing long-running, goal-based, agentic coding tasks on [Sailboxes](https://docs.sailresearch.com/sailboxes), using [Sail inference](https://sailresearch.com) and [OpenCode](https://opencode.ai) in [goal mode](https://x.com/Neriousy/status/2115790892678434965) by default.
+`longshot` is a tiny CLI for starting and managing long-running, goal-based, agentic coding tasks on [Sailboxes](https://docs.sailresearch.com/sailboxes), using [Sail inference](https://sailresearch.com) and [OpenCode](https://opencode.ai) in (newly available) [goal mode](https://x.com/Neriousy/status/2115790892678434965).
 
-**One directory, one run.** Running `longshot start` from a directory will start a new Sailbox, a persistent linux VM designed specifically for long-horizon agents (no max runtime). OpenCode is started in goal mode, configured to use Sail inference (`GLM-5.3` by default), in the Sailbox.
+Running `longshot start` from a directory will start a new Sailbox, a persistent linux VM designed specifically for long-horizon agents (a sandbox that can run indefinitely). OpenCode is automatically started in the Sailbox, configured to use Sail inference (`GLM-5.3` by default) and goal mode.
 
-Longshot keeps resource IDs in `.longshot/run.json`. The agent runs remotely; your terminal can disconnect and re-attach later. There is no local daemon or global Longshot directory.
+**One directory, one run.** Longshot keeps resource IDs in `.longshot/run.json` in the directory `longshot start` is run from. The agent runs remotely; your terminal can disconnect and re-attach later. There is no local daemon or global Longshot directory.
 
 ![Longshot demo: starting a Bun word-counter task, checking status, and exporting the project](docs/demo.gif)
 
