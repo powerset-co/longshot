@@ -5,7 +5,7 @@
 
 A tiny CLI for starting and managing long-running, goal-based, agentic coding tasks on [Sailboxes](https://docs.sailresearch.com/sailboxes), using [Sail inference](https://sailresearch.com) and [OpenCode](https://opencode.ai) in [goal mode](https://x.com/Neriousy/status/2115790892678434965) by default.
 
-**One directory, one run.** Running `longshot start` from a directory will start a new run in a Sailbox, a persistent linux VM designed specifically for long-horizon agents (no max runtime). OpenCode is then started in goal mode, configured to use Sail inference (`GLM-5.3` by default).
+**One directory, one run.** Running `longshot start` from a directory will start a new Sailbox, a persistent linux VM designed specifically for long-horizon agents (no max runtime). OpenCode is started in goal mode, configured to use Sail inference (`GLM-5.3` by default), in the Sailbox.
 
 Longshot keeps resource IDs in `.longshot/run.json`. The agent runs remotely; your terminal can disconnect and re-attach later. There is no local daemon or global Longshot directory.
 
